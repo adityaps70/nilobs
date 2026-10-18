@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nilobs",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "observability": { "enabled": true },
+  "vars": {
+    "NILOBS_MODEL": "claude-sonnet-5-5",
+    "NILOBS_MODEL_QUICK": "claude-haiku-5-5",
+    "NILOBS_RATE_PER_MINUTE": "12"
+  }
+  // Secret (never commit it): set ANTHROPIC_API_KEY in the Cloudflare dashboard under
+  // Workers & Pages > nilobs > Settings > Variables and Secrets, or run: npx wrangler secret put ANTHROPIC_API_KEY
+  //
+  // Optional, stronger rate limit shared across Cloudflare's network. Uncomment to use:
+  // ,"ratelimits": [{ "name": "AI_LIMIT", "namespace_id": "1001", "simple": { "limit": 12, "period": 60 } }]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "nilobs",
+  "private": true,
+  "description": "NilObs: SIRE 2.0 inspection prep for tanker crews, on Cloudflare Workers with Claude-powered AI.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test tests/worker.test.mjs",
+    "build:app": "cd app && npm install && npm run build"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
