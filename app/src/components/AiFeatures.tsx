@@ -150,7 +150,10 @@ export function AskScreen({ rank, ship, seed, clearSeed, openStory, go }: { rank
   const ctl = useRef<AbortController | null>(null)
   const end = useRef<HTMLDivElement>(null)
   const seq = useRef(1)
-  useEffect(() => end.current?.scrollIntoView({ block: "end", behavior: "smooth" }), [msgs])
+  useEffect(() => {
+    // braces matter: newer Chrome returns a Promise from scrollIntoView, which React would treat as a cleanup
+    end.current?.scrollIntoView({ block: "end", behavior: "smooth" })
+  }, [msgs])
   useEffect(() => () => ctl.current?.abort(), [])
 
   const ask = async (q: string) => {
@@ -355,7 +358,9 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   const [debriefBusy, setDebriefBusy] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  useEffect(() => endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" }), [turns, phase])
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" })
+  }, [turns, phase])
 
   if (sample === undefined) return <Scroll className="pt-6"><Thinking label="Getting the AI inspector ready" /></Scroll>
   if (sample === null)
