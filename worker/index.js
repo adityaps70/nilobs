@@ -25,8 +25,8 @@ export default {
     }
     // (Cloudflare's static assets already serve public/privacy.html at /privacy)
     if (AUTH_ROUTES.includes(url.pathname)) return handleAuth(request, env)
-    // Payment provider webhooks (signed by Razorpay / Stripe, no session)
-    if (url.pathname === "/api/pay/razorpay/webhook" || url.pathname === "/api/pay/stripe/webhook") {
+    // Cashfree's payment notifications (signed by Cashfree, no session)
+    if (url.pathname === "/api/pay/cashfree/webhook") {
       if (!authEnabled(env)) return reply(404, { error: "Not set up" })
       return handlePay(request, env, null)
     }

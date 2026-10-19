@@ -675,7 +675,7 @@ export function canBuy(state: WalletState, key: string, now: number): { ok: true
  * - Free → plan, or a higher plan: starts now, with this month's credits now and a refill every 30 days to the end of the term.
  *   Months still to come on the lower plan are kept as credits that don't expire.
  * - The same plan again: the term is extended by what was bought (a month or a year).
- * `paidWith` is a short line for the history, e.g. "₹499 via Razorpay".
+ * `paidWith` is a short line for the history, e.g. "₹499 via Cashfree".
  */
 export function grantPurchase(state: WalletState, key: string, cur: Currency, now: number, paidWith: string): { ok: true; state: WalletState } | { ok: false; why: string } {
   const p = product(key)

@@ -42,7 +42,7 @@ test("product keys and prices", () => {
 
 test("prepaid plans: buy, extend, refill, end", () => {
   let s = E.fresh(T0)
-  let r = E.grantPurchase(s, "plan:watch:monthly", "INR", T0, "₹499 via Razorpay")
+  let r = E.grantPurchase(s, "plan:watch:monthly", "INR", T0, "₹499 via Cashfree")
   assert.ok(r.ok)
   s = r.state
   assert.equal(E.balance(s, T0), 80 + 400)
@@ -66,7 +66,7 @@ test("prepaid plans: buy, extend, refill, end", () => {
 })
 
 test("top-ups never expire; passes stack", () => {
-  let s = E.grantPurchase(E.fresh(T0), "topup:t150", "USD", T0, "$3 via Stripe").state
+  let s = E.grantPurchase(E.fresh(T0), "topup:t150", "USD", T0, "$3 via Cashfree").state
   assert.equal(E.balance(s, T0 + 400 * D), 150)
   s = E.grantPurchase(s, "pass", "INR", T0, "").state
   s = E.grantPurchase(s, "pass", "INR", T0 + D, "").state

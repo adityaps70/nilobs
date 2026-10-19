@@ -454,7 +454,7 @@ export function Pricing() {
           ))}
         </div>
         <p className="text-[12.5px] leading-relaxed text-mute">
-          {HOSTED ? "Pay with Razorpay in rupees (UPI, cards, netbanking) or by card with Stripe in dollars, once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
+          {HOSTED ? "Pay through Cashfree with UPI, cards, netbanking or wallets once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
           {cur === "INR" ? "Rupee prices include GST." : "Dollar prices exclude local taxes."} Ship managers can buy plans for whole crews: get in touch.
           {HOSTED && <> <a href="/terms" className="underline underline-offset-2">Terms</a> · <a href="/refunds" className="underline underline-offset-2">Refunds</a></>}
         </p>

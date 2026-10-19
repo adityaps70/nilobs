@@ -8,7 +8,7 @@
 //    held for an AI answer that never arrives is refunded automatically after 10 minutes.
 //  - Earning: POST /api/wallet/earn { kind, key } pays a fixed amount once per badge, level, streak
 //    milestone and day's chest; shared debriefs follow the daily and monthly limits.
-//  - Buying: worker/pay.js, after Razorpay or Stripe confirm a payment (or /api/wallet/buy when
+//  - Buying: worker/pay.js, after Cashfree confirms a payment (or /api/wallet/buy when
 //    NILOBS_SIMULATED_CHECKOUT is "1", for demos).
 // Each user's wallet is one D1 row with a version number; concurrent changes retry on the latest copy.
 import * as E from "../app/src/economy.ts"
@@ -129,12 +129,13 @@ export async function mutate(env, userId, fn) {
   throw new HttpError(503, "Busy. Try again.", "busy")
 }
 
+/** How each currency can be paid: through Cashfree (once its keys are set), a test switch, or not yet. */
 export function checkoutModes(env) {
   const sim = env.NILOBS_SIMULATED_CHECKOUT === "1"
-  return {
-    INR: env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET ? "razorpay" : sim ? "simulated" : null,
-    USD: env.STRIPE_SECRET_KEY ? "stripe" : sim ? "simulated" : null,
-  }
+  const cashfree = !!(env.CASHFREE_APP_ID && env.CASHFREE_SECRET_KEY)
+  const currencies = String(env.CASHFREE_CURRENCIES || "INR").toUpperCase().split(",").map((c) => c.trim())
+  const mode = (cur) => (cashfree && currencies.includes(cur) ? "cashfree" : sim ? "simulated" : null)
+  return { INR: mode("INR"), USD: mode("USD") }
 }
 /** What the browser gets: the wallet, its perks and the open tickets. */
 export function view(env, data, version) {

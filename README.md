@@ -58,13 +58,13 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 
 ## Payments
 
-Rupees go through **Razorpay** and dollars through **Stripe** (`worker/pay.js`). Prices come only from `app/src/economy.ts`; credits are added only after the provider confirms with a signature the Worker checks, and each payment is credited once (a `pay:<id>` claim), whether it's confirmed by the browser or by the webhook.
+Payments go through **Cashfree Payments** (`worker/pay.js`): UPI, cards, netbanking and wallets. Prices come only from `app/src/economy.ts`. The Worker creates a Cashfree order at that price, the app opens Cashfree's checkout pop-up, and credits are added only once Cashfree says the order is `PAID`: either the Worker asks Cashfree (Get Order, with the secret key) or Cashfree's signed notification arrives (base64 HMAC-SHA256 of timestamp + raw body). Each payment is credited once (a `pay:<id>` claim), however many times it's confirmed. Cashfree needs a mobile number on every order, so the app asks for one at checkout.
 
-1. **Razorpay** (₹): in the Razorpay Dashboard, use **Test mode** first. Settings → API Keys → generate a key. Add two Cloudflare secrets: `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`. Then Settings → Webhooks → add `https://nilobs.com/api/pay/razorpay/webhook` with the events `payment.captured` and `order.paid`, choose a webhook secret and add it as the secret `RAZORPAY_WEBHOOK_SECRET`. Payments should be set to capture automatically (the default).
-2. **Stripe** ($): in the Stripe Dashboard (test mode first), Developers → API keys → secret key → Cloudflare secret `STRIPE_SECRET_KEY`. Developers → Webhooks → add `https://nilobs.com/api/pay/stripe/webhook` with `checkout.session.completed` and `checkout.session.async_payment_succeeded`, and put its signing secret in `STRIPE_WEBHOOK_SECRET`.
-3. Buy something with a test card, check the credits arrive, then swap the test keys for live ones.
+1. In the Cashfree Merchant Dashboard, switch to **Test** and open Developers → API Keys. Add the App ID and Secret Key as Cloudflare secrets `CASHFREE_APP_ID` and `CASHFREE_SECRET_KEY` (nilobs → Settings → Variables and Secrets). Nothing else to set up: each order tells Cashfree to notify `https://nilobs.com/api/pay/cashfree/webhook`.
+2. Buy something on nilobs.com with Cashfree's test card or test UPI and check the credits arrive.
+3. When your account is activated, replace the two secrets with the live keys. The Worker works out whether keys are test (sandbox) or live by itself; `CASHFREE_ENV` = `sandbox` / `production` fixes it if ever needed.
 
-Until a provider's keys are set, that currency shows "Payments in rupees/dollars open soon". `NILOBS_SIMULATED_CHECKOUT = "1"` turns on free test purchases for demos (never on the live site). Records of every payment are in the D1 table `payments`.
+Prices are in rupees. Paying in dollars stays closed ("pay in rupees with an international card") until Cashfree turns on international payments for the account; then set `CASHFREE_CURRENCIES` to `INR,USD` in `wrangler.jsonc`. Until the secrets are set, buying shows "Payments in rupees open soon". `NILOBS_SIMULATED_CHECKOUT = "1"` turns on free test purchases for demos (never on the live site). Every payment is recorded in the D1 table `payments`.
 
 ## Photo check
 
@@ -98,8 +98,10 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 | `NILOBS_WALLET_PER_MINUTE` | `60` | Wallet changes per IP per minute |
 | `NILOBS_PAY_PER_MINUTE` | `8` | Checkouts started per IP per minute |
 | `NILOBS_SIMULATED_CHECKOUT` | (off) | `"1"`: purchases are free test grants (demos only) |
+| `CASHFREE_CURRENCIES` | `INR` | Currencies paid through Cashfree (`INR,USD` once international payments are on) |
+| `CASHFREE_ENV` | (worked out from the keys) | `sandbox` or `production`, to fix Cashfree's environment |
 
-Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `CASHFREE_APP_ID`, `CASHFREE_SECRET_KEY`.
 
 ## Work on it locally
 
@@ -107,7 +109,7 @@ Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `RAZORPAY_KE
 npm install
 cp .dev.vars.example .dev.vars   # put your key in .dev.vars (never commit it)
 npm run dev                      # site and AI at http://localhost:8787
-npm test                         # Worker tests (fake Anthropic, Rumik, Razorpay and Stripe) and economy tests
+npm test                         # Worker tests (fake Anthropic, Rumik and Cashfree) and economy tests
 ```
 
 The site is built from `app/src` (React + Tailwind) into one file, `public/index.html`:
@@ -127,7 +129,7 @@ worker/ai.js       AI endpoint: checks origin and input, rate-limits, streams Cl
 worker/voice.js    voice endpoint: Rumik text-to-speech, cached per line
 worker/guard.js    shared origin check and rate limit
 worker/wallet.js   the account's wallet: charges, tickets, refunds, earning (D1)
-worker/pay.js      Razorpay and Stripe checkout, signature checks, webhooks
+worker/pay.js      Cashfree orders, payment checks and signed notifications
 public/sw.js       offline copy of the app for use at sea
 app/src            app source (React, Tailwind v4, Magic UI components)
 app/src/gen        de-identified fleet data (stories, observations, flashcards, ready kit)

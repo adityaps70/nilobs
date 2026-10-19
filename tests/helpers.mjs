@@ -2,6 +2,7 @@
 import worker from "../worker/index.js"
 import { resetSchemaFlag } from "../worker/auth.js"
 import { resetWalletSchemaFlag } from "../worker/wallet.js"
+import { resetCashfreeMode } from "../worker/pay.js"
 import { fakeD1, fakeGoogle } from "./fakes.mjs"
 
 export const SITE = "https://nilobs.com"
@@ -30,13 +31,14 @@ globalThis.fetch = async (url, init = {}) => {
     fakeVoice.calls++
     return fakeVoice.fail ? new Response("down", { status: 500 }) : new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "content-type": "audio/wav" } })
   }
-  if (fakeProviders.handler && (u.startsWith("https://api.razorpay.com/") || u.startsWith("https://api.stripe.com/"))) return fakeProviders.handler(u, init)
+  if (fakeProviders.handler && (u.startsWith("https://api.cashfree.com/") || u.startsWith("https://sandbox.cashfree.com/"))) return fakeProviders.handler(u, init)
   return realFetch(url, init)
 }
 
 export function freshEnv(extra = {}) {
   resetSchemaFlag()
   resetWalletSchemaFlag()
+  resetCashfreeMode()
   return {
     DB: fakeD1(), GOOGLE_CLIENT_ID: CLIENT, ANTHROPIC_API_KEY: "k", RUMIK_API_KEY: "r",
     ASSETS: { fetch: async () => new Response("site") },

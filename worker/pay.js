@@ -1,35 +1,64 @@
-// Real payments. Prices come only from app/src/economy.ts (never from the browser), and credits are added
-// only after the payment provider confirms the payment with a signature we check:
+// Real payments, through Cashfree Payments. Prices come only from app/src/economy.ts (never from the
+// browser), and credits are added only once Cashfree says the order is paid:
 //
-//   ₹ (INR) → Razorpay. POST /api/pay/order creates a Razorpay order; the browser opens Razorpay Checkout;
-//             POST /api/pay/razorpay/verify checks Razorpay's signature (HMAC of order|payment with the key
-//             secret). The webhook POST /api/pay/razorpay/webhook (order.paid / payment.captured, signed with
-//             the webhook secret) covers a closed tab.
-//   $ (USD) → Stripe. POST /api/pay/order creates a Stripe Checkout Session and returns its URL; after paying,
-//             Stripe sends the user back and POST /api/pay/stripe/confirm asks Stripe whether it was paid. The
-//             webhook POST /api/pay/stripe/webhook (checkout.session.completed, signed) covers a closed tab.
+//   POST /api/pay/order            creates a Cashfree order at the server's price; the browser opens
+//                                  Cashfree's checkout with the order's payment session.
+//   POST /api/pay/cashfree/confirm asks Cashfree (Get Order, with our secret) whether the order is PAID.
+//   POST /api/pay/cashfree/webhook Cashfree's own notification (signed: base64 HMAC-SHA256 of
+//                                  timestamp + raw body with the secret key), which covers a closed tab.
 //
 // Each payment is credited once: a "pay:<id>" claim in the wallet, saved with the version check, means a
-// second confirmation (verify + webhook) does nothing.
+// second confirmation (browser + webhook) does nothing.
 //
-// Secrets (Cloudflare → nilobs → Settings → Variables and Secrets): RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
-// RAZORPAY_WEBHOOK_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET. Without them, that currency can't be bought.
+// Secrets (Cloudflare → nilobs → Settings → Variables and Secrets): CASHFREE_APP_ID, CASHFREE_SECRET_KEY.
+// Test keys work against Cashfree's sandbox and live keys against production: the Worker finds out which
+// on the first call (CASHFREE_ENV = "sandbox" / "production" fixes it instead). CASHFREE_CURRENCIES is "INR", or "INR,USD" once Cashfree has
+// turned on international payments for the account.
 import * as E from "../app/src/economy.ts"
 import { reply } from "./guard.js"
 import { HttpError, checkoutModes, ensureWalletSchema, errorReply, mutate, readWallet, view } from "./wallet.js"
 
-const RAZORPAY_API = "https://api.razorpay.com/v1"
-const STRIPE_API = "https://api.stripe.com/v1"
+const API_VERSION = "2025-01-01"
 const enc = new TextEncoder()
+const BASES = { production: "https://api.cashfree.com/pg", sandbox: "https://sandbox.cashfree.com/pg" }
+const learned = new Map() // App ID → the environment its keys turned out to belong to
+/** Which Cashfree environment these keys belong to: CASHFREE_ENV if set, else what worked last (production first). */
+export const cashfreeMode = (env) =>
+  env.CASHFREE_ENV === "production" || env.CASHFREE_ENV === "sandbox" ? env.CASHFREE_ENV : learned.get(env.CASHFREE_APP_ID) || "production"
+export const resetCashfreeMode = () => learned.clear()
+/** Call Cashfree. Keys rejected by one environment are tried once on the other (test keys → sandbox). */
+async function cashfreeFetch(env, fetchImpl, path, init = {}) {
+  const first = cashfreeMode(env)
+  const call = (mode) => fetchImpl(`${BASES[mode]}${path}`, { ...init, headers: { ...cashfreeHeaders(env), ...(init.headers || {}) } })
+  let res = await call(first)
+  if ((res.status === 401 || res.status === 403) && !env.CASHFREE_ENV) {
+    const other = first === "production" ? "sandbox" : "production"
+    const again = await call(other)
+    if (again.status !== 401 && again.status !== 403) {
+      learned.set(env.CASHFREE_APP_ID, other)
+      res = again
+    }
+  } else if (res.ok && !env.CASHFREE_ENV) learned.set(env.CASHFREE_APP_ID, first)
+  return res
+}
+const cashfreeHeaders = (env) => ({
+  "content-type": "application/json",
+  "x-api-version": API_VERSION,
+  "x-client-id": env.CASHFREE_APP_ID,
+  "x-client-secret": env.CASHFREE_SECRET_KEY,
+})
 
 /* ---------------- signatures ---------------- */
-async function hmacHex(secret, message) {
+/** Cashfree's webhook signature: base64 of HMAC-SHA256(timestamp + raw body) with the secret key. */
+export async function cashfreeSignature(secret, timestamp, body) {
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message))
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(`${timestamp}${body}`)))
+  let bin = ""
+  for (const b of sig) bin += String.fromCharCode(b)
+  return btoa(bin)
 }
-/** Compares two hex strings without leaking where they differ. */
-function sameHex(a, b) {
+/** Compares two strings without leaking where they differ. */
+function same(a, b) {
   a = String(a || "")
   b = String(b || "")
   if (!a || a.length !== b.length) return false
@@ -37,27 +66,17 @@ function sameHex(a, b) {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
   return diff === 0
 }
-export const razorpaySignature = (secret, orderId, paymentId) => hmacHex(secret, `${orderId}|${paymentId}`)
-export const razorpayWebhookSignature = (secret, body) => hmacHex(secret, body)
-/** Stripe: header "t=<unix>,v1=<hex>[,v1=...]", signed payload "<t>.<body>". */
-export async function stripeSignatureOk(secret, header, body, now = Date.now(), tolerance = 300) {
-  const parts = String(header || "").split(",").map((x) => x.trim().split("="))
-  const t = Number(parts.find(([k]) => k === "t")?.[1])
-  const sigs = parts.filter(([k]) => k === "v1").map(([, v]) => v)
-  if (!t || !sigs.length || Math.abs(now / 1000 - t) > tolerance) return false
-  const want = await hmacHex(secret, `${t}.${body}`)
-  return sigs.some((s) => sameHex(s, want))
-}
 
 /* ---------------- crediting a payment (once) ---------------- */
-const fmtMinor = (minor, cur) => E.fmtPrice(minor / 100, cur) // paise and cents are both 1/100
-async function grant(env, pay, paymentRef, fetchedAmount) {
-  if (fetchedAmount != null && Number(fetchedAmount) !== Number(pay.amount)) throw new HttpError(400, "Amount doesn't match the order", "amount_mismatch")
-  const via = pay.provider === "razorpay" ? "Razorpay" : pay.provider === "stripe" ? "Stripe" : "test"
+const minor = (major) => Math.round(Number(major) * 100) // rupees → paise, dollars → cents
+async function grant(env, pay, paymentRef, paid) {
+  if (paid && (minor(paid.amount) !== Number(pay.amount) || String(paid.currency || pay.currency) !== pay.currency))
+    throw new HttpError(400, "Amount doesn't match the order", "amount_mismatch")
+  const via = pay.provider === "cashfree" ? "Cashfree" : "test"
   const out = await mutate(env, pay.user_id, (d, now) => {
     const claim = `pay:${pay.id}`
     if (d.claims.includes(claim)) return { already: true }
-    const paidWith = `${fmtMinor(pay.amount, pay.currency)} via ${via}`
+    const paidWith = `${E.fmtPrice(pay.amount / 100, pay.currency)} via ${via}`
     const r = E.grantPurchase(d.w, pay.product, pay.currency, now, paidWith)
     if (r.ok) d.w = r.state
     else {
@@ -73,8 +92,23 @@ async function grant(env, pay, paymentRef, fetchedAmount) {
   await env.DB.prepare("UPDATE payments SET status = 'paid', paid_at = ?, payment_ref = ? WHERE id = ? AND status != 'paid'").bind(Date.now(), String(paymentRef || ""), pay.id).run()
   return out
 }
+/** A payment that can never be credited (a wrong amount) is logged and marked, and Cashfree isn't asked to retry. */
+async function grantOrMark(env, pay, paymentRef, paid) {
+  try {
+    await grant(env, pay, paymentRef, paid)
+  } catch (e) {
+    if (e instanceof HttpError && e.code === "amount_mismatch") {
+      console.error("payment amount mismatch", pay.id, JSON.stringify(paid), pay.amount, pay.currency)
+      await env.DB.prepare("UPDATE payments SET status = 'mismatch', payment_ref = ? WHERE id = ? AND status != 'paid'").bind(String(paymentRef || ""), pay.id).run()
+      return false
+    }
+    throw e
+  }
+  return true
+}
 
 const findPayment = (env, where, ...args) => env.DB.prepare(`SELECT * FROM payments WHERE ${where}`).bind(...args).first()
+const phoneOk = (p) => /^\+?\d{10,15}$/.test(p)
 
 /* ---------------- routes ---------------- */
 export async function handlePay(request, env, user, fetchImpl = fetch) {
@@ -82,9 +116,8 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
   const path = url.pathname
   await ensureWalletSchema(env.DB)
   try {
-    // webhooks come from Razorpay and Stripe, not from a signed-in browser
-    if (path === "/api/pay/razorpay/webhook") return await razorpayWebhook(request, env)
-    if (path === "/api/pay/stripe/webhook") return await stripeWebhook(request, env)
+    // Cashfree's notification comes from Cashfree, not from a signed-in browser
+    if (path === "/api/pay/cashfree/webhook") return await cashfreeWebhook(request, env)
     if (!user) return reply(401, { error: "Sign in to buy" })
     if (request.method !== "POST") return reply(405, { error: "Use POST" })
     let body = {}
@@ -103,7 +136,7 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
       const can = E.canBuy(data.w, key, Date.now())
       if (!can.ok) return reply(409, { error: can.why, code: "cannot_buy" })
       const mode = checkoutModes(env)[cur]
-      if (!mode) return reply(503, { error: cur === "INR" ? "Payments in rupees aren't open yet." : "Payments in dollars aren't open yet.", code: "payments_closed" })
+      if (!mode) return reply(503, { error: cur === "INR" ? "Payments in rupees aren't open yet." : "Payments in dollars aren't open yet. You can pay in rupees with an international card.", code: "payments_closed" })
       const amount = Math.round(p.price[cur] * 100) // paise or cents
       const id = "pay_" + crypto.randomUUID().replace(/-/g, "").slice(0, 20)
       const now = Date.now()
@@ -113,72 +146,51 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
         const w = await readWallet(env, user.id)
         return reply(200, { provider: "simulated", ...view(env, w.data, w.version) })
       }
-      if (mode === "razorpay") {
-        const res = await fetchImpl(`${RAZORPAY_API}/orders`, {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: "Basic " + btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`) },
-          body: JSON.stringify({ amount, currency: "INR", receipt: id, notes: { pay: id, user: user.id, product: key } }),
-        })
-        const order = await res.json().catch(() => null)
-        if (!res.ok || !order?.id) {
-          console.error("razorpay order", res.status, order?.error?.description)
-          return reply(502, { error: "Couldn't start the payment. Try again.", code: "provider_error" })
-        }
-        await env.DB.prepare("INSERT INTO payments (id, user_id, provider, ref, product, currency, amount, status, created_at) VALUES (?, ?, 'razorpay', ?, ?, 'INR', ?, 'created', ?)").bind(id, user.id, order.id, key, amount, now).run()
-        return reply(200, { provider: "razorpay", keyId: env.RAZORPAY_KEY_ID, orderId: order.id, amount, currency: "INR", name: "NilObs", description: p.name, prefill: { email: user.email || "", name: user.name || "" } })
-      }
-      // Stripe Checkout
+      // Cashfree needs a phone number on every order
+      const phone = String(body?.phone || "").replace(/[\s()-]/g, "")
+      if (!phoneOk(phone)) return reply(400, { error: "Enter your mobile number (10 digits, or + and the country code).", code: "bad_phone" })
       const origin = url.origin
-      const form = new URLSearchParams({
-        mode: "payment",
-        success_url: `${origin}/?checkout=stripe&session_id={CHECKOUT_SESSION_ID}#app/wallet`,
-        cancel_url: `${origin}/?checkout=cancelled#app/wallet`,
-        client_reference_id: id,
-        "line_items[0][quantity]": "1",
-        "line_items[0][price_data][currency]": "usd",
-        "line_items[0][price_data][unit_amount]": String(amount),
-        "line_items[0][price_data][product_data][name]": `NilObs: ${p.name}`,
-        "metadata[pay]": id,
-        "metadata[product]": key,
-        "payment_intent_data[metadata][pay]": id,
-      })
-      if (user.email) form.set("customer_email", user.email)
-      const res = await fetchImpl(`${STRIPE_API}/checkout/sessions`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", authorization: `Bearer ${env.STRIPE_SECRET_KEY}` },
-        body: form.toString(),
-      })
-      const session = await res.json().catch(() => null)
-      if (!res.ok || !session?.id || !session?.url) {
-        console.error("stripe session", res.status, session?.error?.message)
+      const name = String(user.name || "").trim()
+      const order = {
+        order_id: id,
+        order_amount: amount / 100,
+        order_currency: cur,
+        customer_details: {
+          customer_id: String(user.id).replace(/[^A-Za-z0-9]/g, "").slice(0, 50) || "nilobsuser",
+          customer_phone: phone,
+          ...(user.email ? { customer_email: String(user.email).slice(0, 100) } : {}),
+          customer_name: (name.length >= 3 ? name : "NilObs user").slice(0, 100),
+        },
+        order_meta: {
+          return_url: `${origin}/?checkout=cashfree&order_id=${id}#app/wallet`,
+          ...(origin.startsWith("https://") ? { notify_url: `${origin}/api/pay/cashfree/webhook` } : {}),
+        },
+        order_note: `NilObs: ${p.name}`.slice(0, 200),
+        order_tags: { product: key, pay: id },
+      }
+      const res = await cashfreeFetch(env, fetchImpl, "/orders", { method: "POST", headers: { "x-idempotency-key": id }, body: JSON.stringify(order) })
+      const out = await res.json().catch(() => null)
+      if (!res.ok || !out?.payment_session_id) {
+        console.error("cashfree order", res.status, out?.message || out?.code)
         return reply(502, { error: "Couldn't start the payment. Try again.", code: "provider_error" })
       }
-      await env.DB.prepare("INSERT INTO payments (id, user_id, provider, ref, product, currency, amount, status, created_at) VALUES (?, ?, 'stripe', ?, ?, 'USD', ?, 'created', ?)").bind(id, user.id, session.id, key, amount, now).run()
-      return reply(200, { provider: "stripe", url: session.url })
+      await env.DB.prepare("INSERT INTO payments (id, user_id, provider, ref, product, currency, amount, status, created_at) VALUES (?, ?, 'cashfree', ?, ?, ?, ?, 'created', ?)").bind(id, user.id, id, key, cur, amount, now).run()
+      return reply(200, { provider: "cashfree", orderId: id, sessionId: out.payment_session_id, mode: cashfreeMode(env) })
     }
 
-    if (path === "/api/pay/razorpay/verify") {
-      if (!env.RAZORPAY_KEY_SECRET) return reply(503, { error: "Razorpay isn't set up", code: "payments_closed" })
-      const orderId = String(body?.orderId || ""), paymentId = String(body?.paymentId || ""), signature = String(body?.signature || "")
-      const pay = await findPayment(env, "provider = 'razorpay' AND ref = ? AND user_id = ?", orderId, user.id)
+    if (path === "/api/pay/cashfree/confirm") {
+      if (!env.CASHFREE_APP_ID || !env.CASHFREE_SECRET_KEY) return reply(503, { error: "Cashfree isn't set up", code: "payments_closed" })
+      const orderId = String(body?.orderId || "")
+      const pay = await findPayment(env, "provider = 'cashfree' AND ref = ? AND user_id = ?", orderId, user.id)
       if (!pay) return reply(404, { error: "No such order", code: "no_order" })
-      if (!sameHex(signature, await razorpaySignature(env.RAZORPAY_KEY_SECRET, orderId, paymentId))) return reply(400, { error: "The payment couldn't be verified.", code: "bad_signature" })
-      await grant(env, pay, paymentId)
-      const w = await readWallet(env, user.id)
-      return reply(200, { status: "paid", ...view(env, w.data, w.version) })
-    }
-
-    if (path === "/api/pay/stripe/confirm") {
-      if (!env.STRIPE_SECRET_KEY) return reply(503, { error: "Stripe isn't set up", code: "payments_closed" })
-      const sid = String(body?.session || "")
-      const pay = await findPayment(env, "provider = 'stripe' AND ref = ? AND user_id = ?", sid, user.id)
-      if (!pay) return reply(404, { error: "No such checkout", code: "no_order" })
+      if (pay.status === "mismatch") return reply(409, { error: "That payment didn't match the order. Email us and we'll sort it out.", code: "amount_mismatch" })
       if (pay.status !== "paid") {
-        const res = await fetchImpl(`${STRIPE_API}/checkout/sessions/${encodeURIComponent(sid)}`, { headers: { authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } })
-        const s = await res.json().catch(() => null)
-        if (!res.ok || !s) return reply(502, { error: "Couldn't reach Stripe. Your payment is safe; refresh in a minute.", code: "provider_error" })
-        if (s.payment_status !== "paid") return reply(200, { status: "pending" })
-        await grant(env, pay, s.payment_intent || s.id, s.amount_total)
+        const res = await cashfreeFetch(env, fetchImpl, `/orders/${encodeURIComponent(orderId)}`)
+        const o = await res.json().catch(() => null)
+        if (!res.ok || !o) return reply(502, { error: "Couldn't reach Cashfree. Your payment is safe; refresh in a minute.", code: "provider_error" })
+        if (o.order_status !== "PAID") return reply(200, { status: o.order_status === "ACTIVE" ? "pending" : "failed" })
+        if (!(await grantOrMark(env, pay, o.cf_order_id || orderId, { amount: o.order_amount, currency: o.order_currency })))
+          return reply(409, { error: "That payment didn't match the order. Email us and we'll sort it out.", code: "amount_mismatch" })
       }
       const w = await readWallet(env, user.id)
       return reply(200, { status: "paid", ...view(env, w.data, w.version) })
@@ -190,53 +202,22 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
   }
 }
 
-/** A webhook that can never succeed (wrong amount) is logged and answered 200, so the provider doesn't retry it for days. */
-async function grantFromWebhook(env, pay, paymentRef, amount) {
-  try {
-    await grant(env, pay, paymentRef, amount)
-  } catch (e) {
-    if (e instanceof HttpError && e.code === "amount_mismatch") {
-      console.error("payment amount mismatch", pay.id, amount, pay.amount)
-      await env.DB.prepare("UPDATE payments SET status = 'mismatch', payment_ref = ? WHERE id = ? AND status != 'paid'").bind(String(paymentRef || ""), pay.id).run()
-      return
-    }
-    throw e
-  }
-}
-
-async function razorpayWebhook(request, env) {
+async function cashfreeWebhook(request, env) {
+  if (request.method !== "POST") return reply(405, { error: "Use POST" })
   const raw = await request.text()
-  if (!env.RAZORPAY_WEBHOOK_SECRET) return reply(503, { error: "Webhook secret not set" })
-  if (!sameHex(request.headers.get("x-razorpay-signature"), await razorpayWebhookSignature(env.RAZORPAY_WEBHOOK_SECRET, raw))) return reply(400, { error: "Bad signature" })
+  if (!env.CASHFREE_SECRET_KEY) return reply(503, { error: "Cashfree isn't set up" })
+  const ts = request.headers.get("x-webhook-timestamp") || ""
+  if (!ts || !same(request.headers.get("x-webhook-signature"), await cashfreeSignature(env.CASHFREE_SECRET_KEY, ts, raw))) return reply(400, { error: "Bad signature" })
   let ev
   try {
     ev = JSON.parse(raw)
   } catch {
     return reply(400, { error: "Bad body" })
   }
-  if (ev.event === "payment.captured" || ev.event === "order.paid") {
-    const payment = ev.payload?.payment?.entity || {}
-    const orderId = payment.order_id || ev.payload?.order?.entity?.id
-    const pay = orderId ? await findPayment(env, "provider = 'razorpay' AND ref = ?", String(orderId)) : null
-    if (pay && (payment.status === "captured" || ev.event === "order.paid")) await grantFromWebhook(env, pay, payment.id, payment.amount ?? ev.payload?.order?.entity?.amount_paid)
+  if (ev?.type === "PAYMENT_SUCCESS_WEBHOOK" && ev.data?.payment?.payment_status === "SUCCESS") {
+    const orderId = String(ev.data?.order?.order_id || "")
+    const pay = orderId ? await findPayment(env, "provider = 'cashfree' AND ref = ?", orderId) : null
+    if (pay) await grantOrMark(env, pay, ev.data.payment.cf_payment_id, { amount: ev.data.payment.payment_amount ?? ev.data.order.order_amount, currency: ev.data.payment.payment_currency || ev.data.order.order_currency })
   }
   return reply(200, { ok: true })
-}
-
-async function stripeWebhook(request, env) {
-  const raw = await request.text()
-  if (!env.STRIPE_WEBHOOK_SECRET) return reply(503, { error: "Webhook secret not set" })
-  if (!(await stripeSignatureOk(env.STRIPE_WEBHOOK_SECRET, request.headers.get("stripe-signature"), raw))) return reply(400, { error: "Bad signature" })
-  let ev
-  try {
-    ev = JSON.parse(raw)
-  } catch {
-    return reply(400, { error: "Bad body" })
-  }
-  if (ev.type === "checkout.session.completed" || ev.type === "checkout.session.async_payment_succeeded") {
-    const s = ev.data?.object || {}
-    const pay = s.id ? await findPayment(env, "provider = 'stripe' AND ref = ?", String(s.id)) : null
-    if (pay && s.payment_status === "paid") await grantFromWebhook(env, pay, s.payment_intent || s.id, s.amount_total)
-  }
-  return reply(200, { received: true })
 }

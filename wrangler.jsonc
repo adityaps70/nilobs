@@ -27,7 +27,10 @@
     // Old workers.dev pages redirect here (API calls on workers.dev keep working)
     "NILOBS_CANONICAL_HOST": "nilobs.com",
     // Google OAuth Web client (Google Cloud project "NilObs"). A client ID is public; no client secret is used.
-    "GOOGLE_CLIENT_ID": "350187455866-i72se8qt5igs4a6b1hn96hgmrv740qri.apps.googleusercontent.com"
+    "GOOGLE_CLIENT_ID": "350187455866-i72se8qt5igs4a6b1hn96hgmrv740qri.apps.googleusercontent.com",
+    // Payments go through Cashfree once the secrets CASHFREE_APP_ID and CASHFREE_SECRET_KEY are set (test keys use
+    // Cashfree's sandbox). Make this "INR,USD" once Cashfree has turned on international payments for the account.
+    "CASHFREE_CURRENCIES": "INR"
   }
   // Secrets (never commit them): set ANTHROPIC_API_KEY (Claude, for the AI) and RUMIK_API_KEY (Rumik, for the
   // AI inspector's voice) in the Cloudflare dashboard under Workers & Pages > nilobs > Settings > Variables and Secrets,

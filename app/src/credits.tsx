@@ -44,8 +44,8 @@ interface Sheet {
   done?: string
 }
 export type WalletMode = "account" | "local"
-/** How a currency is paid on the server: Razorpay (₹), Stripe ($), a test switch, or not open yet. */
-export type CheckoutMode = "razorpay" | "stripe" | "simulated" | null
+/** How a currency is paid on the server: Cashfree, a test switch, or not open yet. */
+export type CheckoutMode = "cashfree" | "simulated" | null
 export type EarnKind = "badge" | "level" | "streak" | "chest"
 export type BuyResult = { ok: true; message: string } | { ok: false; cancelled?: boolean; error?: string } | { redirect: true }
 
@@ -86,8 +86,8 @@ export interface Wallet {
   earn: (kind: EarnKind, key: string | number, label: string) => void
   /** After signing in: pay out badges, levels and streaks reached on this device before. */
   claimAll: (c: { badges: string[]; level: number; streakBest: number }) => void
-  /** Buy a product ("topup:t500", "pass", "plan:watch:monthly"). */
-  buy: (key: string) => Promise<BuyResult>
+  /** Buy a product ("topup:t500", "pass", "plan:watch:monthly"). Cashfree needs the buyer's mobile number. */
+  buy: (key: string, opts?: { phone?: string }) => Promise<BuyResult>
   unlock: (storyId: number) => boolean
   isUnlocked: (storyId: number) => boolean
   hasDeck: (id: string, cost: number) => boolean
@@ -161,26 +161,43 @@ function writeAcct(user: string, view: AcctView) {
   }
 }
 
-/* ---------------- Razorpay Checkout (₹) ---------------- */
-type RazorpayOpts = Record<string, unknown>
-type RazorpayCtor = new (o: RazorpayOpts) => { open: () => void; on: (ev: string, fn: (r: unknown) => void) => void }
-let rzp: Promise<RazorpayCtor> | null = null
-function loadRazorpay(): Promise<RazorpayCtor> {
-  rzp ??= new Promise<RazorpayCtor>((resolve, reject) => {
-    const w = window as unknown as { Razorpay?: RazorpayCtor }
-    if (w.Razorpay) return resolve(w.Razorpay)
+/* ---------------- Cashfree Checkout ---------------- */
+type CashfreeResult = { error?: { message?: string }; redirect?: boolean; paymentDetails?: { paymentMessage?: string } }
+type CashfreeInstance = { checkout: (o: { paymentSessionId: string; redirectTarget?: string }) => Promise<CashfreeResult | undefined> }
+type CashfreeFactory = (o: { mode: "sandbox" | "production" }) => CashfreeInstance
+let cfSdk: Promise<CashfreeFactory> | null = null
+function loadCashfree(): Promise<CashfreeFactory> {
+  cfSdk ??= new Promise<CashfreeFactory>((resolve, reject) => {
+    const w = window as unknown as { Cashfree?: CashfreeFactory }
+    if (w.Cashfree) return resolve(w.Cashfree)
     const s = document.createElement("script")
-    s.src = "https://checkout.razorpay.com/v1/checkout.js"
+    s.src = "https://sdk.cashfree.com/js/v3/cashfree.js"
     s.async = true
-    s.onload = () => (w.Razorpay ? resolve(w.Razorpay) : reject(new Error("no razorpay")))
+    s.onload = () => (w.Cashfree ? resolve(w.Cashfree) : reject(new Error("no cashfree")))
     s.onerror = () => {
-      rzp = null
+      cfSdk = null
       reject(new Error("blocked"))
     }
     document.head.appendChild(s)
   })
-  return rzp
+  return cfSdk
 }
+type Confirmed = { status: "paid" | "pending" | "failed" | "gone"; view?: unknown }
+/** Ask the server (which asks Cashfree) whether an order is paid, a few times while it's still pending. */
+async function confirmOrder(orderId: string, tries: number): Promise<Confirmed> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await walletApi<{ status: string } & Record<string, unknown>>("/api/pay/cashfree/confirm", { orderId })
+      if (r.status === "paid") return { status: "paid", view: r }
+      if (r.status === "failed") return { status: "failed" }
+    } catch (e) {
+      if ((e as ApiErr).status === 404 || (e as ApiErr).status === 409) return { status: "gone" }
+    }
+    if (i < tries - 1) await new Promise((res) => setTimeout(res, 2000))
+  }
+  return { status: "pending" }
+}
+const STILL_CONFIRMING = "Your payment is still being confirmed. Your credits arrive as soon as Cashfree confirms it; there's no need to pay again."
 
 /** What a purchase gave, for the sheet's "done" message. */
 function boughtMessage(key: string): string {
@@ -335,39 +352,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [mode, account, refresh])
 
-  // Back from Stripe's checkout page: ask the server whether the payment went through
+  // Back from Cashfree's payment page (in-app browsers can't show the pop-up): did the payment go through?
   useEffect(() => {
     if (mode !== "account" || !ready) return
     const q = new URLSearchParams(window.location.search)
     const how = q.get("checkout")
     if (!how) return
-    const sid = q.get("session_id") || ""
-    const clean = () => {
-      const u = new URL(window.location.href)
-      u.searchParams.delete("checkout")
-      u.searchParams.delete("session_id")
-      window.history.replaceState(null, "", u.pathname + u.search + u.hash)
-    }
-    clean()
-    if (how !== "stripe" || !/^cs_[A-Za-z0-9_]+$/.test(sid)) return
+    const orderId = q.get("order_id") || ""
+    const u = new URL(window.location.href)
+    u.searchParams.delete("checkout")
+    u.searchParams.delete("order_id")
+    window.history.replaceState(null, "", u.pathname + u.search + u.hash)
+    if (how !== "cashfree" || !/^pay_[A-Za-z0-9]+$/.test(orderId)) return
     const user = account
     let on = true
-    ;(async () => {
-      for (let i = 0; i < 6 && on; i++) {
-        try {
-          const r = await walletApi<{ status: string } & Partial<AcctView>>("/api/pay/stripe/confirm", { session: sid })
-          if (r.status === "paid") {
-            apply(r, user, true)
-            setSheet({ tab: "plans", done: "Payment received. Thank you!" })
-            return
-          }
-        } catch (e) {
-          if ((e as ApiErr).status === 404) return
-        }
-        await new Promise((res) => setTimeout(res, 2500))
-      }
-      if (on) setSheet({ tab: "plans", reason: "Your card payment is still being confirmed. Your credits arrive as soon as Stripe confirms it; there's no need to pay again." })
-    })()
+    confirmOrder(orderId, 6).then((r) => {
+      if (!on) return
+      if (r.status === "paid") {
+        apply(r.view, user, true)
+        setSheet({ tab: "plans", done: "Payment received. Thank you!" })
+      } else if (r.status === "pending") setSheet({ tab: "plans", reason: STILL_CONFIRMING })
+      else if (r.status === "failed") setSheet({ tab: "plans", reason: "That payment didn't go through, so nothing was charged. You can try again." })
+    })
     return () => {
       on = false
     }
@@ -496,7 +502,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       claimAll: (c) => {
         if (user) send("/api/wallet/claims", c).catch(() => {})
       },
-      buy: async (key) => {
+      buy: async (key, opts) => {
         const p = product(key)
         if (!p) return { ok: false, error: "Unknown product" }
         if (!user) {
@@ -507,43 +513,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           return { ok: true, message: boughtMessage(key) }
         }
         try {
-          const o = await walletApi<Record<string, unknown>>("/api/pay/order", { product: key, currency })
+          const o = await walletApi<Record<string, unknown>>("/api/pay/order", { product: key, currency, phone: opts?.phone || "" })
           if (o.provider === "simulated") {
             apply(o, user, true)
             return { ok: true, message: boughtMessage(key) }
           }
-          if (o.provider === "stripe" && typeof o.url === "string" && o.url.startsWith("https://checkout.stripe.com/")) {
-            window.location.assign(o.url)
-            return { redirect: true }
+          if (o.provider !== "cashfree" || typeof o.sessionId !== "string" || typeof o.orderId !== "string") return { ok: false, error: "Payments aren't open yet." }
+          const orderId = o.orderId
+          const Cashfree = await loadCashfree()
+          const result = await Cashfree({ mode: o.mode === "production" ? "production" : "sandbox" }).checkout({ paymentSessionId: o.sessionId, redirectTarget: "_modal" })
+          // the pop-up couldn't open here (an in-app browser): Cashfree's page brings the buyer back to us
+          if (result?.redirect) return { redirect: true }
+          // paid, failed or closed: the server asks Cashfree which
+          const r = await confirmOrder(orderId, result?.error ? 2 : 5)
+          if (r.status === "paid") {
+            apply(r.view, user, true)
+            return { ok: true, message: boughtMessage(key) }
           }
-          if (o.provider !== "razorpay") return { ok: false, error: "Payments aren't open yet." }
-          const Razorpay = await loadRazorpay()
-          return await new Promise<BuyResult>((resolve) => {
-            const r = new Razorpay({
-              key: o.keyId,
-              order_id: o.orderId,
-              amount: o.amount,
-              currency: o.currency,
-              name: "NilObs",
-              description: o.description,
-              prefill: o.prefill,
-              theme: { color: "#0b6bcb" },
-              handler: (resp: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
-                walletApi<AcctView>("/api/pay/razorpay/verify", { orderId: resp.razorpay_order_id, paymentId: resp.razorpay_payment_id, signature: resp.razorpay_signature })
-                  .then((v) => {
-                    apply(v, user, true)
-                    resolve({ ok: true, message: boughtMessage(key) })
-                  })
-                  .catch(() => {
-                    // paid, but we couldn't confirm it just now: Razorpay's webhook will
-                    setTimeout(refresh, 5000)
-                    resolve({ ok: false, error: "Payment received. Your credits will appear in a minute; there's no need to pay again." })
-                  })
-              },
-              modal: { ondismiss: () => resolve({ ok: false, cancelled: true }), confirm_close: true },
-            })
-            r.open()
-          })
+          // a UPI payment finished on the phone can still arrive after the pop-up closes
+          setTimeout(refresh, 20000)
+          if (r.status === "failed") return { ok: false, error: "That payment didn't go through, so nothing was charged. Try again." }
+          if (result?.error) return { ok: false, cancelled: true }
+          return { ok: false, error: STILL_CONFIRMING }
         } catch (e) {
           const er = e as ApiErr
           return { ok: false, error: er.code === "offline" ? er.message : er.message || "The payment couldn't start. Try again." }
