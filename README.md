@@ -23,12 +23,14 @@ Modelled on usage-credit products such as Emergent: try everything free, then pa
 | | Price (₹ / $) | Credits | Notes |
 |---|---|---|---|
 | Free | 0 | 60 welcome (30 days) + 20 every month | Learning is free; every AI feature can be tried |
-| Watchkeeper | ₹499 / $7 a month (₹4,990 / $70 a year) | 400 a month | All stories and specialist decks, voice interviews, a streak freeze a month |
-| Command | ₹1,299 / $17 a month (₹12,990 / $170 a year) | 1,500 a month | Everything, plus Expert answers and plans |
+| Watchkeeper | ₹499 / $7 for a month (₹4,990 / $70 for a year) | 400 a month | All stories and specialist decks, voice interviews, a streak freeze a month |
+| Command | ₹1,299 / $17 for a month (₹12,990 / $170 for a year) | 1,500 a month | Everything, plus Expert answers and plans |
 | Voyage pass | ₹1,199 / $15 once | 1,000 for 180 days | Watchkeeper perks for 6 months, nothing renews |
 | Top-ups | ₹249 / ₹699 / ₹1,499 ($3 / $9 / $19) | 150 / 500 / 1,200 | Never expire |
 
 What things cost: quick AI answer 1, deep answer 4, expert answer 8 (Command), observation close-out 1, photo check 3 a photo, AI inspector interview 8 (12 with the studio voice), brief with AI plan 20, a new plan 3, a story 5, a specialist deck 40, listening to an answer 1, a streak freeze 10. Failed AI calls are refunded automatically.
+
+Plans are **prepaid and never renew by themselves**: buying the same plan again adds a month or a year; moving up to a higher plan starts it now and turns the lower plan's months still to come into credits that don't expire; a lower plan can't be bought while a higher one runs.
 
 Credits are spent soonest-expiring first: plan credits refill every 30 days and don't roll over, welcome credits last 30 days, credits earned in the app last 60 days, top-ups never expire.
 
@@ -36,15 +38,33 @@ XP is rank, not money: it never goes down. Ten levels from Cadet to Vetting lege
 
 ## Sign in with Google
 
-Anyone can practise without an account. The AI features (Ask NilObs, the AI inspector, Photo check, AI plans and close-out drafts) need a Google sign-in, and signing in keeps credits, plan, XP, streak, briefs and saved screens in step on every device.
+Anyone can practise without an account. The AI features (Ask NilObs, the AI inspector, Photo check, AI plans and close-out drafts) and buying need a Google sign-in. Signed in, the account's credits and plan live on the server, and XP, streak, briefs and saved screens stay in step on every device.
 
 - **Google:** project "NilObs" in Google Cloud, consent screen published (name, email and profile only, so no Google review is needed), Web client with origin `https://nilobs.com` (and `http://localhost:8787` for `wrangler dev`). Its client ID is the `GOOGLE_CLIENT_ID` var; there is no client secret, because the page uses Google's own button and the Worker checks the ID token against Google's public keys.
 - **Cloudflare D1** database `nilobs` (binding `DB`) holds users, sessions (only a hash of each session token) and one JSON copy of each user's state with a version number. Tables: `migrations/0001_init.sql`; the Worker also creates them on first use.
 - **Session:** an HttpOnly, Secure, SameSite=Lax cookie `nilobs_sid`, 30 days, extended while in use. State-changing routes check the request's origin.
-- **Sync:** the app writes to the browser as before; `app/src/auth.tsx` saves changes to `/api/state` a few seconds later and picks up other devices' changes when the app comes to the front. Two devices saving at once: the second one gets the newer copy back, merges (`app/src/sync.ts`: every spend and refund kept, progress never goes backwards, newest screen wins) and saves again. First sign-in on a device used signed-out: the account's credits win and purchases made on that device are added, so free credits don't stack.
+- **Sync (progress and screens, not credits):** the app writes to the browser as before; `app/src/auth.tsx` saves changes to `/api/state` a few seconds later and picks up other devices' changes when the app comes to the front. Two devices saving at once: the second one gets the newer copy back, merges (`app/src/sync.ts`: progress never goes backwards, newest screen wins) and saves again. A `wallet` sent to `/api/state` is dropped.
 - **Gate:** with `GOOGLE_CLIENT_ID` and `DB` set, `/api/ai` and `/api/voice` answer 401 to signed-out visitors. Without them, sign-in is simply off and the AI is open (how local tests run).
-- **Delete:** Progress & badges → Delete account erases the user, sessions and state. Privacy page: `public/privacy.html` (served at `/privacy`).
-- Credits are still worked out in the browser and synced, so a determined user could edit them. Before real payments, move charging to the Worker.
+- **Delete:** Progress & badges → Delete account erases the user, sessions, state and wallet. Payment records stay (no name or email), and a one-way hash of the Google ID is kept in `starts` so a new account with the same Google login doesn't get the free starting credits again. Pages: `public/privacy.html`, `public/terms.html`, `public/refunds.html` (served at `/privacy`, `/terms`, `/refunds`).
+
+## The wallet on the server
+
+Signed in, the browser never decides a balance. `worker/wallet.js` keeps each account's wallet in D1 (one row with a version number; concurrent changes retry on the latest copy) and applies the same rules as the app (`app/src/economy.ts`):
+
+- **Charging:** the app calls `POST /api/wallet/spend { item, ref }` with what it wants (e.g. `{ kind: "photo", n: 2 }`); the server prices it from the plan and balance. For AI items it opens a **ticket** (id = `ref`) that `/api/ai` and `/api/voice` require: each ticket pays for a set number of answers, on set models, with a size limit, a photo count and an expiry. Without a valid ticket the AI answers 402.
+- **Refunds:** an AI charge is kept the moment the answer starts arriving. If nothing arrives, `POST /api/wallet/refund` gives it back (and a charge left hanging is refunded after 10 minutes). Replies that must be JSON (photo checks, grades) are checked on the server before anything is sent, so a malformed or "not a ship" reply is refundable and leaks nothing.
+- **Earning:** badges, levels and streak milestones pay once per account (`POST /api/wallet/earn`, and `/api/wallet/claims` after signing in); the chest once a day; shared debriefs within the daily and monthly limits. These are still reported by the app, so the most anyone can collect this way is the one-off rewards (about 630 credits) plus the chest and 4 debriefs a month.
+- Signed out (and in the Claude artifact) the app keeps a practice wallet in the browser, with simulated purchases.
+
+## Payments
+
+Rupees go through **Razorpay** and dollars through **Stripe** (`worker/pay.js`). Prices come only from `app/src/economy.ts`; credits are added only after the provider confirms with a signature the Worker checks, and each payment is credited once (a `pay:<id>` claim), whether it's confirmed by the browser or by the webhook.
+
+1. **Razorpay** (₹): in the Razorpay Dashboard, use **Test mode** first. Settings → API Keys → generate a key. Add two Cloudflare secrets: `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`. Then Settings → Webhooks → add `https://nilobs.com/api/pay/razorpay/webhook` with the events `payment.captured` and `order.paid`, choose a webhook secret and add it as the secret `RAZORPAY_WEBHOOK_SECRET`. Payments should be set to capture automatically (the default).
+2. **Stripe** ($): in the Stripe Dashboard (test mode first), Developers → API keys → secret key → Cloudflare secret `STRIPE_SECRET_KEY`. Developers → Webhooks → add `https://nilobs.com/api/pay/stripe/webhook` with `checkout.session.completed` and `checkout.session.async_payment_succeeded`, and put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+3. Buy something with a test card, check the credits arrive, then swap the test keys for live ones.
+
+Until a provider's keys are set, that currency shows "Payments in rupees/dollars open soon". `NILOBS_SIMULATED_CHECKOUT = "1"` turns on free test purchases for demos (never on the live site). Records of every payment are in the D1 table `payments`.
 
 ## Photo check
 
@@ -55,13 +75,11 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 - Photos always use `NILOBS_MODEL` (the vision model), have their own per-IP limit (`NILOBS_PHOTO_PER_MINUTE`, default 4) and are checked on the server: at most 3 per request, JPEG/PNG/WebP/GIF, about 1.5 MB each.
 - If the photo isn't of a ship, the check is refunded. The pure logic (areas, examples, prompt, clean-up of the reply) is in `app/src/photo.ts`, tested in `app/tests/photo.test.mjs`.
 
-**Checkout is simulated in this version** and credits live in each visitor's browser. Before charging money: add accounts, move the wallet to the server (Cloudflare D1 works well) and connect Razorpay or Stripe.
-
 ## Keep costs under control
 
 - In the Anthropic Console, set a **monthly spend limit** for this key.
 - The endpoint only accepts requests from the site's own origin, caps input size, and limits each IP to `NILOBS_RATE_PER_MINUTE` requests a minute (default 12, per Worker instance), with a tighter `NILOBS_PHOTO_PER_MINUTE` (default 4) for photo checks. For limits shared across Cloudflare's network, uncomment the `ratelimits` block in `wrangler.jsonc`.
-- Credits, streaks and progress are stored in each visitor's browser in this version. Before charging money, add real accounts and server-side credit checks.
+- Every AI and voice call needs a paid ticket from the server wallet, so usage is bounded by credits; `NILOBS_WALLET_PER_MINUTE` (default 60) and `NILOBS_PAY_PER_MINUTE` (default 8) limit wallet changes and checkout starts per IP.
 
 ## Settings (`wrangler.jsonc` → `vars`)
 
@@ -77,6 +95,11 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 | `NILOBS_VOICE_TONE` | (none) | Tone tag for muga, e.g. `neutral` |
 | `NILOBS_VOICE_DESCRIPTION` | (none) | Voice description for mulberry, e.g. `calm, firm male inspector` |
 | `NILOBS_VOICE_PER_MINUTE` | `20` | Voice requests per IP per minute |
+| `NILOBS_WALLET_PER_MINUTE` | `60` | Wallet changes per IP per minute |
+| `NILOBS_PAY_PER_MINUTE` | `8` | Checkouts started per IP per minute |
+| `NILOBS_SIMULATED_CHECKOUT` | (off) | `"1"`: purchases are free test grants (demos only) |
+
+Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 
 ## Work on it locally
 
@@ -84,7 +107,7 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 npm install
 cp .dev.vars.example .dev.vars   # put your key in .dev.vars (never commit it)
 npm run dev                      # site and AI at http://localhost:8787
-npm test                         # Worker tests (fake Anthropic and Rumik APIs) and credit-economy tests
+npm test                         # Worker tests (fake Anthropic, Rumik, Razorpay and Stripe) and economy tests
 ```
 
 The site is built from `app/src` (React + Tailwind) into one file, `public/index.html`:
@@ -103,17 +126,20 @@ worker/index.js    Cloudflare Worker: static site + /api/ai + /api/health
 worker/ai.js       AI endpoint: checks origin and input, rate-limits, streams Claude's answer
 worker/voice.js    voice endpoint: Rumik text-to-speech, cached per line
 worker/guard.js    shared origin check and rate limit
+worker/wallet.js   the account's wallet: charges, tickets, refunds, earning (D1)
+worker/pay.js      Razorpay and Stripe checkout, signature checks, webhooks
 public/sw.js       offline copy of the app for use at sea
 app/src            app source (React, Tailwind v4, Magic UI components)
 app/src/gen        de-identified fleet data (stories, observations, flashcards, ready kit)
 app/src/economy.ts plans, prices, credit rules (pure functions, tested)
 app/src/photo.ts   Photo check: areas, examples, prompt, reply clean-up (pure, tested)
 app/src/auth.tsx   Sign in with Google, account card, sync with the account
-app/src/sync.ts    merge rules for two devices' copies (pure, tested)
+app/src/sync.ts    merge rules for two devices' copies of progress (pure, tested)
+app/src/credits.tsx the wallet in the app: the server's copy when signed in, a practice wallet otherwise
 worker/auth.js     Google token check, sessions, /api/me, /api/state (D1)
 migrations/        D1 schema
 app/build.mjs      builds public/index.html
-tests/             Worker and sign-in tests (app/tests: economy, Photo check, sync)
+tests/             Worker, sign-in, wallet and payment tests (app/tests: economy, purchases, Photo check, sync)
 ```
 
 ## Data

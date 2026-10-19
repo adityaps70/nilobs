@@ -163,9 +163,9 @@ export function PhoneApp({
   useEffect(() => {
     if (officialSignal) setBankMode("official")
   }, [officialSignal])
-  type SavedBrief = { major: string; port: string; rank: string; date: string; done: boolean[]; plan: string }
+  type SavedBrief = { major: string; port: string; rank: string; date: string; done: boolean[]; plan: string; ticket?: string }
   const [briefSaved, setBriefSaved] = usePersist<SavedBrief | null>("sr.brief", null, isBrief)
-  const brief = useMemo<Brief | null>(() => (briefSaved ? buildBrief(briefSaved.major, briefSaved.port, briefSaved.rank) : null), [briefSaved?.major, briefSaved?.port, briefSaved?.rank]) // eslint-disable-line react-hooks/exhaustive-deps
+  const brief = useMemo<Brief | null>(() => (briefSaved ? { ...buildBrief(briefSaved.major, briefSaved.port, briefSaved.rank), ticket: briefSaved.ticket } : null), [briefSaved?.major, briefSaved?.port, briefSaved?.rank, briefSaved?.ticket]) // eslint-disable-line react-hooks/exhaustive-deps
   const briefDate = briefSaved?.date ?? ""
   const done = briefSaved?.done ?? []
   const setDone = (d: boolean[]) => setBriefSaved((b) => (b ? { ...b, done: d } : b))
@@ -204,9 +204,10 @@ export function PhoneApp({
 
   const build = (major: string, port: string, r: string, date: string) => {
     if (building.current) return
-    if (!wallet.charge(COSTS.brief, `Brief: ${major} · ${port || "any port"} · ${r}`, "briefs")) return
+    const ticket = wallet.charge({ kind: "brief" }, { note: `${major} · ${port || "any port"} · ${r}` })
+    if (!ticket) return
     building.current = true
-    setBriefSaved({ major, port, rank: r, date, done: [], plan: "" })
+    setBriefSaved({ major, port, rank: r, date, done: [], plan: "", ticket })
     go("loading")
     setTimeout(() => (building.current = false), 1500)
   }
@@ -927,7 +928,7 @@ function Interview({ rank, night }: { rank: string; night: boolean }) {
           </span>
           <button
             type="button"
-            onClick={() => !!wallet.charge(COSTS.interview, `Mock interview (${rank in INTERVIEW ? rank : "2/O"})`, "interviews") && setStarted(true)}
+            onClick={() => !!wallet.charge({ kind: "mockInterview" }, { note: rank in INTERVIEW ? rank : "2/O" }) && setStarted(true)}
             className="flex h-12 items-center justify-between rounded-xl bg-hero-accent px-4 text-[15px] font-semibold text-[#1a0a00]"
           >
             Start session <CostTag cost={COSTS.interview} />

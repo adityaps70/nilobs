@@ -178,7 +178,7 @@ export const EARN = {
 }
 
 /* ---------------- helpers ---------------- */
-const uid = () => Math.random().toString(36).slice(2, 10)
+const uid = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16) : Math.random().toString(36).slice(2, 12))
 const num = (x: unknown, d = 0) => (typeof x === "number" && Number.isFinite(x) ? x : d)
 const pad = (n: number) => String(n).padStart(2, "0")
 export const dayOf = (t: number) => {
@@ -568,4 +568,156 @@ export function recordShare(state: WalletState, now: number, text = ""): WalletS
   const s = earn(state, EARN.share, "Shared a debrief", now)
   s.share = { day: dayOf(now), month, n: (s.share.month === month ? s.share.n : 0) + 1, seen: [...s.share.seen, textKey(text)].slice(-40) }
   return s
+}
+
+/* =====================================================================
+   What things are, for the server: the same rules on both sides.
+   The server (worker/wallet.js) charges with these; the app uses them to show prices.
+   ===================================================================== */
+export type Tier = "quick" | "default" | "complex"
+export type ItemKind =
+  | "askQuick" | "askDeep" | "askExpert" | "explain" | "photo" | "interview" | "voiceInterview" | "mockInterview"
+  | "brief" | "planRedo" | "listen" | "story" | "deck" | "freeze"
+export interface Item { kind: ItemKind; n?: number; id?: string | number }
+export interface AiAllowance {
+  calls: number // answers this charge pays for
+  tiers: Tier[] // models it may use ("complex" only for the Command plan, see expertTier)
+  expertTier?: boolean // may also use "complex" when the buyer is on Command
+  images?: boolean // photos allowed (up to the n paid for)
+  json?: "always" | "maybe" // replies that must be JSON (checked on the server before they're sent)
+  voice?: number // studio-voice lines included
+  maxChars: number // most text a single call may send
+  hold: boolean // refunded automatically if no answer arrives
+  hours: number // how long it stays usable
+}
+export interface ItemRule { usage?: UsageKey; refundable: boolean; label: (it: Item) => string; ai?: AiAllowance }
+export const ITEMS: Record<ItemKind, ItemRule> = {
+  askQuick: { usage: "ai", refundable: true, label: () => "Ask NilObs (quick)", ai: { calls: 1, tiers: ["quick"], maxChars: 60000, hold: true, hours: 1 } },
+  askDeep: { usage: "deep", refundable: true, label: () => "Ask NilObs (deep)", ai: { calls: 1, tiers: ["default"], maxChars: 60000, hold: true, hours: 1 } },
+  askExpert: { usage: "deep", refundable: true, label: () => "Ask NilObs (expert)", ai: { calls: 1, tiers: ["complex"], maxChars: 60000, hold: true, hours: 1 } },
+  explain: { usage: "explains", refundable: true, label: () => "Explain an observation", ai: { calls: 1, tiers: ["quick"], maxChars: 12000, hold: true, hours: 1 } },
+  photo: { usage: "photos", refundable: true, label: (it) => `Photo check · ${it.n} photo${it.n === 1 ? "" : "s"}`, ai: { calls: 1, tiers: ["default"], expertTier: true, images: true, json: "always", maxChars: 30000, hold: true, hours: 1 } },
+  interview: { usage: "interviews", refundable: true, label: () => "AI inspector", ai: { calls: 14, tiers: ["quick"], json: "maybe", maxChars: 20000, hold: false, hours: 24 } },
+  voiceInterview: { usage: "voice", refundable: true, label: () => "AI inspector (voice)", ai: { calls: 14, tiers: ["quick"], json: "maybe", voice: 40, maxChars: 20000, hold: false, hours: 24 } },
+  mockInterview: { usage: "interviews", refundable: false, label: () => "Mock interview" },
+  brief: { usage: "briefs", refundable: false, label: () => "Inspection brief", ai: { calls: 1, tiers: ["default"], expertTier: true, maxChars: 20000, hold: false, hours: 24 * 60 } },
+  planRedo: { usage: "deep", refundable: true, label: () => "A new prep plan", ai: { calls: 1, tiers: ["default"], expertTier: true, maxChars: 20000, hold: true, hours: 1 } },
+  listen: { usage: "listen", refundable: true, label: () => "Listen to an answer", ai: { calls: 0, tiers: [], voice: 1, maxChars: 0, hold: true, hours: 1 } },
+  story: { usage: "stories", refundable: false, label: () => "Unlocked an inspection story" },
+  deck: { usage: "decks", refundable: false, label: (it) => `Unlocked deck: ${String(it.id)}` },
+  freeze: { refundable: false, label: () => "Streak freeze" },
+}
+/** Specialist decks and their one-time price (fleet.ts lists the same; a test keeps them in step). */
+export const PAID_DECKS: Record<string, number> = { ecdis: 40, cdi: 40, china: 40 }
+/** Badge ids (progress.tsx BADGES; a test keeps them in step). Each pays EARN.badge once. */
+export const BADGE_IDS = ["first", "streak3", "streak7", "streak30", "eye10", "combo5", "cards100", "stories5", "kit", "chest", "mock", "sharp", "photo", "lvl3", "lvl5"]
+
+/** Credits an item costs for this wallet, or null when it can't be bought (e.g. Expert without Command). */
+export function itemCost(item: Item, p: ReturnType<typeof perks>): number | null {
+  switch (item.kind) {
+    case "askExpert":
+      return p.expert ? COSTS.askExpert : null
+    case "photo": {
+      const n = Math.round(Number(item.n))
+      return n >= 1 && n <= 3 ? COSTS.photo * n : null
+    }
+    case "voiceInterview":
+      return p.voiceIncluded ? COSTS.interview : COSTS.voiceInterview
+    case "mockInterview":
+      return COSTS.interview
+    case "story":
+      return Number.isInteger(Number(item.id)) && Number(item.id) >= 0 ? (p.allStories ? 0 : COSTS.story) : null
+    case "deck": {
+      const c = PAID_DECKS[String(item.id)]
+      return c == null ? null : p.allDecks ? 0 : c
+    }
+    default:
+      return item.kind in COSTS ? (COSTS as Record<string, number>)[item.kind] : null
+  }
+}
+
+/* ---------------- real purchases ---------------- */
+export type ProductKind = "topup" | "pass" | "plan"
+export interface Product { key: string; kind: ProductKind; name: string; credits: number; price: Record<Currency, number>; planId?: PlanId; cycle?: Cycle; topup?: TopUp }
+/** "topup:t500", "pass", "plan:watch:monthly", "plan:command:annual" → what it is and what it costs. */
+export function product(key: string): Product | null {
+  const [kind, a, b] = String(key || "").split(":")
+  if (kind === "topup") {
+    const t = TOPUPS.find((x) => x.id === a)
+    return t ? { key, kind, name: `${t.credits} credits`, credits: t.credits, price: t.price, topup: t } : null
+  }
+  if (kind === "pass" && !a) return { key, kind, name: PASS.name, credits: PASS.credits, price: PASS.price }
+  if (kind === "plan" && (a === "watch" || a === "command") && (b === "monthly" || b === "annual")) {
+    const pl = PLANS[a]
+    return { key, kind, name: `${pl.name}, ${b === "annual" ? "1 year" : "1 month"}`, credits: pl.credits, price: { INR: pl.price.INR[b], USD: pl.price.USD[b] }, planId: a, cycle: b }
+  }
+  return null
+}
+export const productKey = (kind: ProductKind, id?: string, cycle?: Cycle) => (kind === "plan" ? `plan:${id}:${cycle}` : kind === "pass" ? "pass" : `topup:${id}`)
+
+/** When the plan you have now is paid up to (non-renewing plans end then). */
+export const paidUntil = (s: WalletState) => (s.plan.id === "free" ? null : s.plan.cancelAt ?? s.plan.term)
+
+/** Can this wallet buy this now? Paid plans don't renew, so a lower plan can't be bought while a higher one runs. */
+export function canBuy(state: WalletState, key: string, now: number): { ok: true } | { ok: false; why: string } {
+  const p = product(key)
+  if (!p) return { ok: false, why: "Unknown product" }
+  const s = tick(state, now)
+  if (p.kind === "plan" && s.plan.id !== "free" && PLAN_RANK[p.planId!] < PLAN_RANK[s.plan.id]) {
+    const until = paidUntil(s)
+    return { ok: false, why: `You're on ${PLANS[s.plan.id].name}${until ? ` until ${dayOf(until)}` : ""}. You can buy ${PLANS[p.planId!].name} after that.` }
+  }
+  return { ok: true }
+}
+
+/**
+ * Add a paid purchase to the wallet. Plans are prepaid and don't renew:
+ * - Free → plan, or a higher plan: starts now, with this month's credits now and a refill every 30 days to the end of the term.
+ *   Months still to come on the lower plan are kept as credits that don't expire.
+ * - The same plan again: the term is extended by what was bought (a month or a year).
+ * `paidWith` is a short line for the history, e.g. "₹499 via Razorpay".
+ */
+export function grantPurchase(state: WalletState, key: string, cur: Currency, now: number, paidWith: string): { ok: true; state: WalletState } | { ok: false; why: string } {
+  const p = product(key)
+  if (!p) return { ok: false, why: "Unknown product" }
+  const can = canBuy(state, key, now)
+  if (!can.ok) return can
+  const s = tick(state, now)
+  const price = fmtPrice(p.price[cur], cur)
+  if (p.kind === "topup") {
+    addBucket(s, "topup", p.credits, `Top-up ${p.credits}`, null, now)
+    log(s, { at: now, delta: p.credits, label: `Top-up: ${p.credits} credits, ${paidWith || price}`, kind: "purchase" })
+  } else if (p.kind === "pass") {
+    const until = Math.max(s.pass?.until ?? now, now) + PASS.days * DAY
+    s.pass = { until }
+    addBucket(s, "pass", PASS.credits, "Voyage pass credits", until, now)
+    log(s, { at: now, delta: PASS.credits, label: `Voyage pass: ${PASS.credits} credits for ${PASS.days} days, ${paidWith || price}`, kind: "purchase" })
+  } else {
+    const plan = PLANS[p.planId!]
+    const length = termFrom(0, p.cycle!)
+    if (s.plan.id === p.planId) {
+      const end = Math.max(paidUntil(s) ?? now, now)
+      s.plan = { ...s.plan, cycle: p.cycle === "annual" ? "annual" : s.plan.cycle, term: end + length, cancelAt: end + length, next: null }
+      log(s, { at: now, delta: 0, label: `${plan.name} extended to ${dayOf(end + length)}, ${paidWith || price}`, kind: "purchase" })
+    } else {
+      // moving up from a paid plan: its months still to come are kept as credits that don't expire
+      const old = s.plan
+      const end = paidUntil(s)
+      if (old.id !== "free" && end != null) {
+        let months = 0
+        for (let t = old.renews; t < end; t += CYCLE_DAYS * DAY) months++
+        if (months > 0) {
+          const n = months * PLANS[old.id].credits
+          addBucket(s, "legacy", n, `Unused ${PLANS[old.id].name} months`, null, now)
+          log(s, { at: now, delta: n, label: `${PLANS[old.id].name}: ${months} unused month${months === 1 ? "" : "s"} kept as ${n} credits that don't expire`, kind: "grant" })
+        }
+      }
+      const renews = now + CYCLE_DAYS * DAY
+      s.plan = { id: p.planId!, cycle: p.cycle!, started: now, renews, term: now + length, cancelAt: now + length, next: null }
+      addBucket(s, "monthly", plan.credits, `${plan.name} plan: monthly credits`, renews, now)
+      log(s, { at: now, delta: plan.credits, label: `${plan.name} until ${dayOf(now + length)}, ${paidWith || price}: ${plan.credits} credits now, ${plan.credits} every 30 days`, kind: "purchase" })
+    }
+  }
+  s.paid += 1
+  return { ok: true, state: s }
 }

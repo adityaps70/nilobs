@@ -759,6 +759,8 @@ export interface Brief {
   questions: { q: string; topic: Topic; source: string }[]
   negatives: { text: string; source: string }[]
   tasks: string[]
+  /** On nilobs.com, signed in: the charge that paid for this brief, which also pays for its first AI plan. */
+  ticket?: string
 }
 
 export function buildBrief(major: string, port: string, rank: string): Brief {

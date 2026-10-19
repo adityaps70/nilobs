@@ -6,6 +6,7 @@ import { CARDS, CHAPTER_NAMES, OBS, TYPE_NAME, type CardI, type Obs } from "@/fl
 import { RANK_NAMES, RANK_TOPICS } from "@/data"
 import { STORIES, type Story } from "@/stories"
 import { UNAUTHORIZED_EVENT, useAiGate } from "@/auth"
+import { readyTicket } from "@/tickets"
 
 /* ---------------- capability ---------------- */
 export type SampleOpts = {
@@ -15,6 +16,8 @@ export type SampleOpts = {
   cache?: boolean | { gcTime?: number; refresh?: boolean }
   /** Photos for Claude to look at (Photo check). Only where imageLimits() says this view can send them. */
   images?: Blob[]
+  /** On nilobs.com, signed in: the charge (from wallet.charge) that pays for this call. */
+  ticket?: string | null
 }
 export type SampleMsg = { role: "user" | "assistant"; content: string }
 export type ImageLimits = { maxCount: number; maxInputBytes: number; mediaTypes: string[] }
@@ -58,8 +61,20 @@ function getSample(): Promise<SampleFn | null> {
     return cached
   }
   const c = (typeof window !== "undefined" ? (window as unknown as { claude?: ClaudeGlobal }).claude : undefined)
-  cached = c?.use ? c.use("sample").then((f) => (f as SampleFn) ?? null).catch(() => null) : Promise.resolve(null)
+  cached = c?.use ? c.use("sample").then((f) => (f ? withoutTicket(f as SampleFn) : null)).catch(() => null) : Promise.resolve(null)
   return cached
+}
+/** Claude's own `sample` (in the artifact) doesn't take our ticket: pass everything else through. */
+function withoutTicket(f: SampleFn): SampleFn {
+  const strip = (o?: SampleOpts) => {
+    if (!o || !("ticket" in o)) return o
+    const { ticket: _t, ...rest } = o
+    return rest
+  }
+  const g = ((input: string | SampleMsg[], opts?: SampleOpts) => f(input, strip(opts))) as SampleFn
+  g.json = (input, opts) => f.json(input, strip(opts))
+  if (f.limits) g.limits = () => f.limits!()
+  return g
 }
 
 /* ---------------- your own server (/api/ai) ---------------- */
@@ -75,16 +90,19 @@ export function httpSample(endpoint: string): SampleFn {
     const images = opts.images?.length ? opts.images : null
     if (images && images.length > SERVER_IMAGES.maxCount) throw { code: "image_rejected", message: "Too many photos" }
     if (images?.some((b) => b.size > SERVER_IMAGES.maxInputBytes || !SERVER_IMAGES.mediaTypes.includes(b.type))) throw { code: "image_rejected", message: "Photo too large or wrong type" }
-    // photos are never cached: the same words with a new photo must get a new answer
-    const ttl = images || opts.cache === false ? 0 : typeof opts.cache === "object" ? opts.cache.gcTime ?? 300000 : 300000
+    // photos are never cached (the same words with a new photo must get a new answer), nor paid calls
+    const ttl = images || opts.ticket || opts.cache === false ? 0 : typeof opts.cache === "object" ? opts.cache.gcTime ?? 300000 : 300000
     const hit = answerCache.get(key)
     if (ttl && hit && Date.now() - hit.at < ttl && !(typeof opts.cache === "object" && opts.cache.refresh)) {
       opts.onText?.({ text: hit.text, delta: hit.text })
       return { text: hit.text, truncated: false }
     }
+    // a charge made a moment ago must reach the server before the call that uses it
+    if (opts.ticket) await readyTicket(opts.ticket)
     let res: Response
     try {
       const payload: Record<string, unknown> = { messages, tier, json }
+      if (opts.ticket) payload.ticket = opts.ticket
       if (images) payload.images = await Promise.all(images.map(async (b) => ({ media_type: b.type, data: await blobBase64(b) })))
       if (opts.signal?.aborted) throw new Error("aborted")
       res = await fetch(endpoint, {
@@ -102,6 +120,15 @@ export function httpSample(endpoint: string): SampleFn {
         // signed out or the session ended: tell the app so it shows the sign-in again
         window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
         throw { code: "session_expired", message: "Sign in again" }
+      }
+      if (res.status === 402) {
+        let why = ""
+        try {
+          why = String((await res.json())?.error || "")
+        } catch {
+          /* no body */
+        }
+        throw { code: "payment", message: why || "This needs credits" }
       }
       const code = res.status === 429 ? "rate_limited" : res.status === 413 ? (images ? "image_rejected" : "prompt_too_large") : res.status === 400 ? (images ? "image_rejected" : "invalid_request") : "upstream_error"
       throw { code, message: `Server answered ${res.status}` }
@@ -202,6 +229,8 @@ export function aiErrorCopy(e: AiErr) {
       return HOSTED ? "Your sign-in ended. Sign in with Google again to use the AI." : "Sign in to Claude again to use the AI features."
     case "refused":
       return "Claude couldn't answer that one. Try asking it a different way."
+    case "payment":
+      return "That charge wasn't accepted, so nothing was taken. Check your credits and try again."
     case "invalid_json":
       return "The grade came back garbled. Try again."
     case "prompt_too_large":

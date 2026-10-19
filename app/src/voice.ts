@@ -4,6 +4,7 @@
 // - Listening: the browser's own speech recognition (Chrome, Edge, Safari), which fills the answer box.
 import { useCallback, useEffect, useRef, useState } from "react"
 import { HOSTED } from "@/ai"
+import { readyTicket } from "@/tickets"
 
 /* ---------------- server status ---------------- */
 type Status = { ai: boolean; voice: boolean }
@@ -49,7 +50,8 @@ export function stopSpeaking() {
 export type SpeakResult = "studio" | "device" | "none"
 
 /** Read text aloud. Resolves when it finishes (or is stopped). */
-export async function speak(text: string, opts: { studio?: boolean; signal?: AbortSignal; onStart?: () => void } = {}): Promise<SpeakResult> {
+/** `ticket`: on nilobs.com, signed in, the charge that pays for the studio voice (a listen, or a voice interview). */
+export async function speak(text: string, opts: { studio?: boolean; signal?: AbortSignal; onStart?: () => void; ticket?: string | null } = {}): Promise<SpeakResult> {
   stopSpeaking()
   const clean = text.replace(/[*_#`]/g, "").replace(/\s+/g, " ").trim().slice(0, 600)
   if (!clean) return "none"
@@ -57,7 +59,8 @@ export async function speak(text: string, opts: { studio?: boolean; signal?: Abo
     try {
       let url = clips.get(clean)
       if (!url) {
-        const res = await fetch("/api/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: clean }), signal: opts.signal })
+        if (opts.ticket) await readyTicket(opts.ticket)
+        const res = await fetch("/api/voice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: clean, ...(opts.ticket ? { ticket: opts.ticket } : {}) }), signal: opts.signal })
         if (!res.ok) throw new Error(`voice ${res.status}`)
         url = URL.createObjectURL(await res.blob())
         clips.set(clean, url)

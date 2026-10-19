@@ -200,7 +200,7 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
     const nt = from ? from.note : note.trim()
     if (!sample || !lim || !pics.length || job?.status === "busy") return
     const n = pics.length
-    const receipt = wallet.charge(COSTS.photo * n, `Photo check · ${a.label} · ${n} photo${n === 1 ? "" : "s"}`, "photos", { hold: true })
+    const receipt = wallet.charge({ kind: "photo", n }, { note: a.label })
     if (!receipt) return
     const ex = examplesFor(a)
     const ids = new Set(ex.map((e) => e.id))
@@ -217,10 +217,11 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
         signal: j.ctl.signal,
         cache: false,
         modelTier: wallet.perks.expert ? "complex" : "default",
+        ticket: receipt,
       })
       const r = normalize(raw, n, (id) => ids.has(id))
       if (!r.relevant) {
-        wallet.refund(receipt, "photos")
+        wallet.refund(receipt)
         if (still()) setJob({ ...j, status: "error", err: "That doesn't look like part of a ship, its equipment or a shipboard record, so your credits were refunded. Try a closer photo of the area." })
         return
       }
@@ -230,11 +231,11 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
       if (still()) setJob({ ...j, status: "done", result: r, xp })
     } catch (e) {
       const er = e as AiErr
-      wallet.refund(receipt, "photos")
+      wallet.refund(receipt)
       if (!still()) return
       // stopped: the screen puts the photos back so they can be sent again
       if (er.code === "cancelled") setJob({ ...j, status: "stopped" })
-      else setJob({ ...j, status: "error", err: `${aiErrorCopy(er)} Your credits were refunded.`, hide: HIDE_CODES.includes(er.code || "") || er.code === "images_unavailable" })
+      else setJob({ ...j, status: "error", err: er.code === "payment" ? aiErrorCopy(er) : `${aiErrorCopy(er)} Your credits were refunded.`, hide: HIDE_CODES.includes(er.code || "") || er.code === "images_unavailable" })
     }
   }
   const startOver = () => {

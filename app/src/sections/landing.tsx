@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from "react"
+import { HOSTED } from "@/ai"
 import { AnimatePresence, motion } from "motion/react"
 
 import { AnimatedShinyText } from "@/components/magicui/animated-shiny-text"
@@ -177,7 +178,7 @@ export function LandingHero() {
               <I.Target size={17} className="text-[#db4f10]" /> Play Spot the observation
             </a>
           </div>
-          <p className="text-[13.5px] text-mute">No card. Flashcards, the radar, the ready kit and the game need no sign-up. Sign in with Google for the AI and to keep your progress on every device.</p>
+          <p className="text-[13.5px] text-mute">{HOSTED ? "No card. Flashcards, the radar, the ready kit and the game need no sign-up. Sign in with Google for the AI and to keep your progress on every device." : "No card, no sign-up. Flashcards, the radar, the ready kit and the game are free every day."}</p>
           <dl className="glass mt-1 grid grid-cols-2 gap-x-6 gap-y-4 rounded-[22px] p-5 sm:grid-cols-4">
             {[
               { v: STORIES.length, l: "inspection stories", icon: I.Newspaper, c: "rose" },
@@ -323,9 +324,9 @@ const FAQ: [string, string][] = [
   ["What can I do for free?", `Everything that teaches: ${CARDS.length} flashcards with spaced repetition, Spot the observation, the observation radar, the ready kit, daily missions and the question bank. You also get ${WELCOME_CREDITS} credits in your first month and ${PLANS.free.credits} every month after, so you can try every AI feature properly before you pay.`],
   ["How do credits work?", "AI features and premium content cost credits; the price is shown on every button before you tap it. A quick AI answer is 1 credit, a mock interview 8, a brief with its AI plan 20. If an AI answer fails, the credits come straight back."],
   ["Do credits expire?", `Plan credits refill every 30 days and don't roll over, so use them. Welcome credits last ${WELCOME.days} days, credits you earn in the app last 60 days, and top-ups never expire. NilObs always spends the credits that expire soonest first.`],
-  ["What happens when I run out?", "Learning carries on as normal: flashcards, the game, the radar and the ready kit are always free. AI features pause until your plan refills, you earn more, or you top up. Nothing is charged automatically."],
+  ["What happens when I run out?", "Learning carries on as normal: flashcards, the game, the radar and the ready kit are always free. AI features pause until your plan refills, you earn more, or you top up. Nothing is ever charged automatically."],
   ["I'm at sea for months. Do I need a subscription?", `No. The ${PASS.name} is a one-off: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days / 30} months, and nothing renews. Download what you need while you have signal.`],
-  ["Can I cancel?", "Yes, any time. Your plan runs to the end of the month you paid for, then you move to Free. Your XP, level, streak and saved work stay."],
+  ["Does a plan renew by itself?", "No. You pay for a month or a year up front, and it simply ends then: you move to Free unless you buy more time. There's nothing to cancel. Your XP, level, streak and saved work stay."],
 ]
 
 export function Pricing() {
@@ -365,7 +366,7 @@ export function Pricing() {
                     <span className={cn("pb-1 text-[13px]", pop ? "text-hero-muted" : "text-mute")}>{c.id === "free" ? "for ever" : "/ month"}</span>
                   </span>
                   <span className={cn("mt-1 text-[12px]", pop ? "text-hero-muted" : "text-mute")}>
-                    {c.id === "free" ? `${WELCOME_CREDITS} credits to start` : cycle === "annual" ? `Billed ${fmtPrice(PLANS[c.id].price[cur].annual, cur)} a year` : `${PLANS[c.id].credits.toLocaleString("en-IN")} credits every month`}
+                    {c.id === "free" ? `${WELCOME_CREDITS} credits to start` : cycle === "annual" ? `${fmtPrice(PLANS[c.id].price[cur].annual, cur)} for a year, paid once` : `${PLANS[c.id].credits.toLocaleString("en-IN")} credits every month`}
                   </span>
                 </span>
                 <ul className={cn("flex flex-col gap-2 border-t pt-4", pop ? "border-hero-track" : "border-line")}>
@@ -452,7 +453,11 @@ export function Pricing() {
             </details>
           ))}
         </div>
-        <p className="text-[12.5px] leading-relaxed text-mute">Prototype: checkout is simulated and no payment is taken. {cur === "INR" ? "Rupee prices include GST." : "Dollar prices exclude local taxes."} Ship managers can buy plans for whole crews: get in touch.</p>
+        <p className="text-[12.5px] leading-relaxed text-mute">
+          {HOSTED ? "Pay with Razorpay in rupees (UPI, cards, netbanking) or by card with Stripe in dollars, once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
+          {cur === "INR" ? "Rupee prices include GST." : "Dollar prices exclude local taxes."} Ship managers can buy plans for whole crews: get in touch.
+          {HOSTED && <> <a href="/terms" className="underline underline-offset-2">Terms</a> · <a href="/refunds" className="underline underline-offset-2">Refunds</a></>}
+        </p>
       </div>
     </section>
   )

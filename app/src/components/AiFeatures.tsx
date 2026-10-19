@@ -252,8 +252,7 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
       wallet.openPlans({ reason: "Expert answers come with the Command plan.", select: "command" })
       return
     }
-    const usage = mode === "quick" ? "ai" : "deep"
-    const receipt = wallet.charge(m.cost, `Ask NilObs (${m.label.toLowerCase()})`, usage, { hold: true })
+    const receipt = wallet.charge({ kind: mode === "quick" ? "askQuick" : mode === "expert" ? "askExpert" : "askDeep" })
     if (!receipt) return
     busySince.current = Date.now()
     const ctx = retrieve(q, rank, mode === "quick" ? { obs: 5, cards: 4, stories: 2 } : { obs: 8, cards: 7, stories: 3 })
@@ -275,6 +274,7 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
       const { text: out } = await sample(turns, {
         cache: false,
         modelTier: m.tier,
+        ticket: receipt,
         signal: c.signal,
         onText: ({ text: t }) => {
           got = t
@@ -289,12 +289,12 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
       // a failed answer costs nothing; a stopped one is only charged if some of it arrived
       const partial = !!(e.text ?? got).trim()
       if (e.code === "cancelled" && partial) wallet.settle(receipt)
-      else wallet.refund(receipt, usage)
+      else wallet.refund(receipt)
       if (e.code === "cancelled" && !partial) {
         // stopped before anything arrived: take the question back out and put it in the box
         setMsgs((x) => x.filter((y) => y.id !== aid && y.id !== uid))
         setText(q)
-      } else setMsgs((x) => x.map((y) => (y.id === aid ? { ...y, text: e.text ?? got, status: e.code === "cancelled" ? "done" : "error", error: e.code === "cancelled" ? undefined : `${aiErrorCopy(e)} Your ${m.cost} credit${m.cost > 1 ? "s were" : " was"} refunded.` } : y)))
+      } else setMsgs((x) => x.map((y) => (y.id === aid ? { ...y, text: e.text ?? got, status: e.code === "cancelled" ? "done" : "error", error: e.code === "cancelled" ? undefined : e.code === "payment" ? aiErrorCopy(e) : `${aiErrorCopy(e)} Your ${m.cost} credit${m.cost > 1 ? "s were" : " was"} refunded.` } : y)))
     } finally {
       setBusy(false)
     }
@@ -321,13 +321,13 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
     let receipt: string | null = null
     // the first listen in the studio voice costs a credit; replays of the same answer are free
     if (studio && !msg.heard) {
-      receipt = wallet.charge(COSTS.listen, "Listen to an answer", "listen")
+      receipt = wallet.charge({ kind: "listen" })
       if (!receipt) return
     }
     setSpeaking(msg.id)
     const plain = msg.text.replace(/\[(?:O|C|S)\d+\]/g, "")
-    const how = await speak(plain, { studio: !!studio })
-    if (receipt && how !== "studio") wallet.refund(receipt, "listen")
+    const how = await speak(plain, { studio: !!studio, ticket: receipt })
+    if (receipt && how !== "studio") wallet.refund(receipt)
     if (how === "studio") setMsgs((x) => x.map((y) => (y.id === msg.id ? { ...y, heard: true } : y)))
     setSpeaking((s) => (s === msg.id ? null : s))
   }
@@ -633,7 +633,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   // "Read aloud" in a typed interview uses the device's own voice
   const say = async (q: string) => {
     setTalking(true)
-    await speak(q, { studio: !!studio && sesRef.current.voice })
+    await speak(q, { studio: !!studio && sesRef.current.voice, ticket: sesRef.current.receipt })
     if (mounted.current) setTalking(false)
   }
   useEffect(() => {
@@ -656,7 +656,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   const voiceCost = wallet.perks.voiceIncluded ? COSTS.interview : COSTS.voiceInterview
   const cost = voicePick && studio ? voiceCost : COSTS.interview
   const start = () => {
-    const receipt = wallet.charge(cost, `AI inspector${voicePick ? " (voice)" : ""} · ${RANK_NAMES[rank] || rank}`, voicePick ? "voice" : "interviews")
+    const receipt = wallet.charge({ kind: voicePick && studio ? "voiceInterview" : "interview" }, { note: RANK_NAMES[rank] || rank })
     if (!receipt) return
     const pick = pickQuestions(rank, topic)
     const first = cardOf(pick[0])
@@ -672,7 +672,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   const cancelRefund = () => {
     if (!canRefund && phase !== "setup") return
     stopSpeaking()
-    wallet.refund(ses.receipt, ses.voice ? "voice" : "interviews")
+    wallet.refund(ses.receipt)
     setSes(newSession(rank))
     setErr("")
   }
@@ -688,7 +688,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
     try {
       const prev = current.follow ? turns[turns.length - 2]?.q : undefined
       const card = cardOf(current.card)
-      const g = await sample.json<Grade>(gradePrompt(srank, ship, current.q, card, ans, prev), { modelTier: "quick" })
+      const g = await sample.json<Grade>(gradePrompt(srank, ship, current.q, card, ans, prev), { modelTier: "quick", ticket: sesRef.current.receipt })
       const grade: Grade = {
         score: Math.max(0, Math.min(10, Math.round(Number(g?.score) || 0))),
         verdict: String(g?.verdict || "Needs work"),
@@ -746,6 +746,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
     try {
       await sample(`You are a SIRE 2.0 vetting superintendent debriefing a ${RANK_NAMES[srank] || srank} after a mock inspection interview. Here are their results:\n\n${lines}\n\nWrite: one line on how they came across, then "**Fix these before the inspection**" with exactly 3 "- " bullets (specific, practical), then one encouraging line. Under 140 words. No invented regulation numbers.`, {
         modelTier: "quick",
+        ticket: ses.receipt,
         onText: ({ text: t }) => update((s) => ({ ...s, debrief: t })),
       })
     } catch (e) {
@@ -993,7 +994,7 @@ export function ExplainObs({ o, compact }: { o: Obs; compact?: boolean }) {
   }
   const run = async () => {
     if (state === "busy") return
-    const receipt = wallet.charge(COSTS.explain, "Explain an observation", "explains", { hold: true })
+    const receipt = wallet.charge({ kind: "explain" })
     if (!receipt) return
     setState("busy")
     setExpanded(true)
@@ -1015,6 +1016,7 @@ No invented regulation numbers or OCIMF wording; say "check your SMS" where it d
         modelTier: "quick",
         signal: c.signal,
         cache: false,
+        ticket: receipt,
         onText: ({ text: t }) => {
           got = t
           setOut(t)
@@ -1028,9 +1030,9 @@ No invented regulation numbers or OCIMF wording; say "check your SMS" where it d
     } catch (e) {
       const er = e as AiErr
       if (er.code === "cancelled" && got.trim()) wallet.settle(receipt)
-      else wallet.refund(receipt, "explains")
+      else wallet.refund(receipt)
       if (er.text) setOut(er.text)
-      setErr(er.code === "cancelled" ? "" : `${aiErrorCopy(er)} Your credit was refunded.`)
+      setErr(er.code === "cancelled" ? "" : er.code === "payment" ? aiErrorCopy(er) : `${aiErrorCopy(er)} Your credit was refunded.`)
       setState(er.code === "cancelled" && got.trim() ? "done" : "error")
     }
   }
@@ -1083,6 +1085,7 @@ export function BriefPlan({ brief, date, evidence, daysLeft, plan, setPlan }: { 
   const [live, setLive] = useState("")
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState("")
+  const [needPay, setNeedPay] = useState(false)
   const ctl = useRef<AbortController | null>(null)
   useEffect(() => () => ctl.current?.abort(), [])
   if (sample === null && gate === "closed")
@@ -1101,7 +1104,7 @@ export function BriefPlan({ brief, date, evidence, daysLeft, plan, setPlan }: { 
     if (!sample || busy) return
     let receipt: string | null = null
     if (redo) {
-      receipt = wallet.charge(COSTS.planRedo, "A new prep plan", "deep", { hold: true })
+      receipt = wallet.charge({ kind: "planRedo" })
       if (!receipt) return
     }
     setBusy(true)
@@ -1121,14 +1124,20 @@ For each day write "**Day N**" on its own line, then 3 "- " bullets (about 20 mi
         signal: c.signal,
         cache: false,
         modelTier: wallet.perks.expert ? "complex" : "default",
+        // the first plan is paid for by the brief; a new one by its own charge
+        ticket: receipt ?? brief.ticket ?? null,
         onText: ({ text: t }) => setLive(t),
       })
       wallet.settle(receipt)
       setPlan(text)
     } catch (e) {
       const er = e as AiErr
-      if (receipt) wallet.refund(receipt, "deep")
-      if (er.code !== "cancelled") setErr(`${aiErrorCopy(er)}${receipt ? " Your credits were refunded." : ""}`)
+      if (receipt) wallet.refund(receipt)
+      if (er.code === "payment" && !receipt) {
+        setNeedPay(true)
+        setErr(`This brief's included plan was already used, or the brief was made before you signed in.`)
+      }
+      else if (er.code !== "cancelled") setErr(`${aiErrorCopy(er)}${receipt && er.code !== "payment" ? " Your credits were refunded." : ""}`)
     } finally {
       setBusy(false)
     }
@@ -1142,7 +1151,7 @@ For each day write "**Day N**" on its own line, then 3 "- " bullets (about 20 mi
       {out ? <Md text={out} /> : busy ? <Thinking label={`Planning your ${days} days`} /> : (
         <>
           <p className="text-[13.5px] leading-snug text-mute">Turn this brief into a {days}-day plan, 20 minutes a day, built around your oil major, rank and the records above. The first plan is included with the brief.</p>
-          <button type="button" disabled={sample === undefined} onClick={() => run()} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#7b5cff] to-[#1660d6] text-[14px] font-semibold text-white disabled:opacity-50"><I.Sparkle size={16} /> Make my plan</button>
+          <button type="button" disabled={sample === undefined} onClick={() => run(needPay)} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#7b5cff] to-[#1660d6] text-[14px] font-semibold text-white disabled:opacity-50"><I.Sparkle size={16} /> Make my plan{needPay && <CostTag cost={COSTS.planRedo} className="text-white/85" />}</button>
         </>
       )}
       {busy && <button type="button" onClick={() => ctl.current?.abort()} className="self-start text-[12px] font-semibold text-mute underline underline-offset-2">Stop</button>}

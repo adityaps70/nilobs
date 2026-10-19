@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
+import { HOSTED } from "@/ai"
 import { AnimatePresence, motion } from "motion/react"
 
 import { AnimatedCircularProgressBar } from "@/components/magicui/animated-circular-progress-bar"
@@ -291,7 +292,7 @@ export function Footer() {
       <div className="mx-auto flex max-w-[1180px] flex-col gap-4 text-[13px] leading-relaxed text-mute">
         <span className="flex flex-wrap items-center gap-3 font-semibold text-ink"><Logo size={30} /><span className="text-signal-ink">Aim for nil.</span><span className="rounded-full border border-line px-2 py-0.5 font-mono text-[10.5px] font-normal text-mute">prototype</span></span>
         <p className="max-w-[90ch]">
-          Debrief data: 19 posts in the “SIRE 2.0” WhatsApp channel, April–October 2026, paraphrased with ship, crew and inspector names removed. Fleet data: SIRE 2.0, CDI, PSC and pre-vetting reports and observation lists from 2025–2026, with ship, crew, inspector and company names removed and wording paraphrased. The fleet console figures are sample data. Model answers, flashcards and the “what they want to see” lists were written for this prototype and should be checked by a master mariner before launch. Signed out, your rank, credits, ratings, saved questions and streak stay in this browser only; signed in with Google, they sync to your account.
+          Debrief data: 19 posts in the “SIRE 2.0” WhatsApp channel, April–October 2026, paraphrased with ship, crew and inspector names removed. Fleet data: SIRE 2.0, CDI, PSC and pre-vetting reports and observation lists from 2025–2026, with ship, crew, inspector and company names removed and wording paraphrased. The fleet console figures are sample data. Model answers, flashcards and the “what they want to see” lists were written for this prototype and should be checked by a master mariner before launch. {HOSTED ? "Signed out, your rank, practice credits, ratings, saved questions and streak stay in this browser only. Signed in with Google, they follow your account, and your credits are kept on the server." : "Your rank, credits, ratings, saved questions and streak stay in this browser only."}
         </p>
         <p className="max-w-[90ch]">
           Industry figures:{" "}
@@ -300,7 +301,13 @@ export function Footer() {
           <a className="underline underline-offset-2" href="https://marineinspection.app/article/sire-2-0-negative-observations-how-to-reduce-them-guide" target="_blank" rel="noreferrer">marineinspection.app, citing Kaiko Systems</a>
           . Vendor figures show association, not cause. Not affiliated with OCIMF. UI components from Magic UI (MIT).
         </p>
-        <p><a className="font-semibold text-ink underline underline-offset-2" href="/privacy">Privacy</a></p>
+        {HOSTED && (
+          <p className="flex flex-wrap gap-x-4 gap-y-1">
+            <a className="font-semibold text-ink underline underline-offset-2" href="/privacy">Privacy</a>
+            <a className="font-semibold text-ink underline underline-offset-2" href="/terms">Terms</a>
+            <a className="font-semibold text-ink underline underline-offset-2" href="/refunds">Refunds</a>
+          </p>
+        )}
       </div>
     </footer>
   )

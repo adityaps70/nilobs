@@ -1,4 +1,5 @@
 import { Component, forwardRef, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { HOSTED } from "@/ai"
 import { AnimatePresence, motion } from "motion/react"
 
 import { AnimatedBeam } from "@/components/magicui/animated-beam"
@@ -313,7 +314,7 @@ export function Features() {
     { icon: <I.Mic size={20} />, tile: "tile-violet", title: "Rehearse out loud", body: "The AI inspector asks what was asked of your rank and checks your answer for the fact, the procedure and the record." },
     { icon: <I.Flame size={20} />, tile: "tile-orange", title: "Five minutes a day", body: "Three daily missions, a streak with freezes, XP and levels. Cards you miss come back first. Fits between watches." },
     { icon: <I.Briefcase size={20} />, tile: "tile-amber", title: "Ready kit for the ship", body: `${KIT_TOTAL} pre-inspection checks: the drill matrix, rest-hour cross-checks, cyber evidence, photo rules and CDI prep.` },
-    { icon: <I.Moon size={20} />, tile: "tile-slate", title: "Built for watchkeeping", body: "Night-watch mode keeps your night vision. Practise without signing up, and we never ask for your ship. Sign in with Google only for the AI and to sync." },
+    { icon: <I.Moon size={20} />, tile: "tile-slate", title: "Built for watchkeeping", body: HOSTED ? "Night-watch mode keeps your night vision. Practise without signing up, and we never ask for your ship. Sign in with Google only for the AI and to sync." : "Night-watch mode keeps your night vision. Anonymous by design: no sign-up, no name, no ship." },
   ]
   return (
     <section id="features" className="gutter scroll-mt-20 py-20">

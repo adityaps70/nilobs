@@ -1,14 +1,15 @@
-// Sign in with Google, and keeping an account's credits, progress and saved screens in step across devices.
+// Sign in with Google, and keeping an account's progress and saved screens in step across devices.
+// (The account's credits live on the server itself: see credits.tsx and worker/wallet.js.)
 //
 // Only on the hosted site (nilobs.com), and only when the server has sign-in set up (/api/auth/config).
 // In the Claude artifact the AI runs on the viewer's own Claude account, so none of this applies there.
 //
 // Sync works like another browser tab: the app keeps writing to localStorage as it always has; this layer
 // notices changes and saves them to the account, and writes the account's newer copy back into localStorage
-// with a storage event, which the wallet and progress already listen for.
+// with a storage event, which progress already listens for.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { AnimatePresence, motion } from "motion/react"
-import { EXTRA_KEYS, MAX_EXTRA_CHARS, PROGRESS_KEY, WALLET_KEY, mergeAll, type Extras, type Synced } from "@/sync"
+import { EXTRA_KEYS, MAX_EXTRA_CHARS, PROGRESS_KEY, WALLET_ACCOUNT_KEY, WALLET_KEY, mergeAll, type Extras, type Synced } from "@/sync"
 import { cn } from "@/lib/utils"
 
 declare const __AI_ENDPOINT__: string
@@ -100,9 +101,9 @@ function readLocal(meta: Meta): Synced {
     }
     extras[k] = { v: parse(raw), t: meta.stamps[k] || 0 }
   }
-  return { wallet: parse(ls.get(WALLET_KEY)), progress: parse(ls.get(PROGRESS_KEY)), extras }
+  return { progress: parse(ls.get(PROGRESS_KEY)), extras }
 }
-/** Put a copy into this browser, telling the open screens (wallet, progress) through a storage event. */
+/** Put a copy into this browser, telling the open screens (progress, saved screens) through a storage event. */
 function writeLocal(s: Synced, meta: Meta) {
   const put = (k: string, v: unknown) => {
     const raw = JSON.stringify(v)
@@ -110,7 +111,6 @@ function writeLocal(s: Synced, meta: Meta) {
     ls.set(k, raw)
     window.dispatchEvent(new StorageEvent("storage", { key: k, newValue: raw, storageArea: localStorage }))
   }
-  if (s.wallet) put(WALLET_KEY, s.wallet)
   if (s.progress) put(PROGRESS_KEY, s.progress)
   for (const [k, e] of Object.entries(s.extras || {})) {
     if (!EXTRA_KEYS.includes(k)) continue
@@ -120,7 +120,7 @@ function writeLocal(s: Synced, meta: Meta) {
   }
 }
 function clearDevice() {
-  for (const k of [WALLET_KEY, PROGRESS_KEY, META_KEY, ...EXTRA_KEYS, ...DEVICE_ONLY]) ls.del(k)
+  for (const k of [WALLET_KEY, WALLET_ACCOUNT_KEY, PROGRESS_KEY, META_KEY, ...EXTRA_KEYS, ...DEVICE_ONLY]) ls.del(k)
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T | null }> {
@@ -172,7 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (r.status === 409 && r.body) {
           // another device saved first: take its copy into ours, then try again
           const m = readMeta()
-          const merged = mergeAll(r.body.data || { wallet: null, progress: null, extras: {} }, readLocal(m), true)
+          const merged = mergeAll(r.body.data || { progress: null, extras: {} }, readLocal(m), true)
           writeLocal(merged, m)
           m.version = r.body.version
           writeMeta(m)
@@ -448,7 +448,8 @@ function SignInPitch() {
   return (
     <ul className="flex flex-col gap-1.5 text-[13.5px] leading-snug text-mute">
       <li>• The AI inspector, Ask NilObs, Photo check and AI plans</li>
-      <li>• Your credits, XP, streak and briefs on every phone and laptop</li>
+      <li>• Credits and plans you can buy, kept safe on your account</li>
+      <li>• Your XP, streak and briefs on every phone and laptop</li>
       <li>• Nothing is posted to Google. We keep your name and email only. <a href="/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-2">Privacy</a></li>
     </ul>
   )
@@ -497,7 +498,7 @@ export function AccountCard({ className }: { className?: string }) {
       )}
       {confirm === "delete" && (
         <div className="flex flex-col gap-2 rounded-xl bg-signal-soft p-3 text-[13px] leading-snug">
-          <span className="font-medium text-signal-ink">Delete your NilObs account? Your credits, plan, XP, streak and saved briefs are erased for good, on every device. This can't be undone.</span>
+          <span className="font-medium text-signal-ink">Delete your NilObs account? Your credits (including any you paid for), plan, XP, streak and saved briefs are erased for good, on every device. This can't be undone.</span>
           <span className="flex gap-2">
             <button type="button" onClick={() => a.deleteAccount()} className="h-9 rounded-lg bg-signal px-3 text-[13px] font-semibold text-white">Delete for good</button>
             <button type="button" onClick={() => setConfirm("")} className="h-9 rounded-lg px-3 text-[13px] font-semibold">Keep my account</button>
@@ -513,7 +514,7 @@ export function SignInForAi({ title = "Sign in with Google to use the AI", child
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl border border-dashed border-line bg-surface p-4 text-[13.5px] leading-snug">
       <b className="font-semibold">{title}</b>
-      <span className="text-mute">{children ?? "It's free: your 80 starter credits come with you. Signing in also keeps your progress on every device."}</span>
+      <span className="text-mute">{children ?? "It's free, and a new account starts with 80 credits. Signing in also keeps your progress on every device."}</span>
       <GoogleButton />
     </div>
   )

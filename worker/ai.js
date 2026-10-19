@@ -38,7 +38,33 @@ const SYSTEM =
   "Follow the instructions given in the user's message, keep to ship inspections and seafaring, " +
   "and never invent regulation numbers or OCIMF question wording."
 
-export async function handleAi(request, env, fetchImpl = fetch) {
+/** Reads a reply the way the app does: the whole text, a fenced block, or the outermost {...} / [...]. */
+export function parseJsonReply(text) {
+  const tryParse = (t) => {
+    try {
+      return { ok: true, v: JSON.parse(t) }
+    } catch {
+      return { ok: false }
+    }
+  }
+  let r = tryParse(text.trim())
+  if (!r.ok) {
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+    if (fence) r = tryParse(fence[1].trim())
+  }
+  if (!r.ok) {
+    const a = text.search(/[[{]/), b = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"))
+    if (a >= 0 && b > a) r = tryParse(text.slice(a, b + 1))
+  }
+  return r
+}
+
+/**
+ * `meter` (signed-in users, see worker/wallet.js) ties the call to a paid ticket: begin() books it,
+ * delivered() keeps the charge once the answer reaches the user, returned() gives the call back.
+ * Replies that must be JSON are checked here before anything is sent, so a failed one leaks nothing.
+ */
+export async function handleAi(request, env, fetchImpl = fetch, meter = null, ctx = null) {
   if (request.method !== "POST") return reply(405, { error: "Use POST" })
   const key = env.ANTHROPIC_API_KEY
   if (!key) return reply(500, { error: "The server is missing the ANTHROPIC_API_KEY secret" })
@@ -69,7 +95,13 @@ export async function handleAi(request, env, fetchImpl = fetch) {
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
     .map((m) => ({ role: m.role, content: m.content }))
   if (!clean.length || clean[0].role !== "user" || clean[clean.length - 1].role !== "user") return reply(400, { error: "Messages must start and end with a user turn" })
-  if (clean.reduce((n, m) => n + m.content.length, 0) > MAX_INPUT_CHARS) return reply(413, { error: "Too long" })
+  const chars = clean.reduce((n, m) => n + m.content.length, 0)
+  if (chars > MAX_INPUT_CHARS) return reply(413, { error: "Too long" })
+  if (meter) {
+    const deny = await meter.begin(body, { tier, images: images.length, chars })
+    if (deny) return deny
+  }
+  const jsonOnly = meter ? meter.json : false
   const messages = []
   for (const m of clean) {
     const last = messages[messages.length - 1]
@@ -90,16 +122,18 @@ export async function handleAi(request, env, fetchImpl = fetch) {
         // photos always go to the main (vision) model, never the quick one
         model: images.length && tier === "quick" ? models.default : models[tier],
         max_tokens: MAX_TOKENS[tier],
-        system: body?.json ? SYSTEM + " Reply with only the JSON value requested, with no other text." : SYSTEM,
+        system: body?.json || jsonOnly ? SYSTEM + " Reply with only the JSON value requested, with no other text." : SYSTEM,
         messages,
         output_config: { effort: EFFORT[tier] },
         stream: true,
       }),
     })
   } catch {
+    await meter?.returned()
     return reply(502, { error: "Could not reach the AI service" })
   }
   if (!upstream.ok || !upstream.body) {
+    await meter?.returned()
     const status = upstream.status === 429 || upstream.status === 529 ? 429 : upstream.status === 400 ? 400 : 502
     let detail = ""
     try {
@@ -114,10 +148,38 @@ export async function handleAi(request, env, fetchImpl = fetch) {
   const enc = new TextEncoder()
   const dec = new TextDecoder()
   const reader = upstream.body.getReader()
+  let sent = false // has any of the answer reached the user?
+  let finished = false
   const stream = new ReadableStream({
     async start(controller) {
       let buf = ""
+      let whole = "" // JSON replies are held back until they're complete and valid
       const fail = (code) => controller.enqueue(enc.encode(ERR + JSON.stringify({ code })))
+      const send = async (text) => {
+        if (!sent) {
+          sent = true
+          await meter?.delivered() // record the delivery before the user has anything
+        }
+        controller.enqueue(enc.encode(text))
+      }
+      const finish = async (failed) => {
+        finished = true
+        if (jsonOnly) {
+          const r = failed ? { ok: false } : parseJsonReply(whole)
+          if (!r.ok) {
+            await meter?.returned()
+            fail(failed || "invalid_json")
+          } else if (meter?.item === "photo" && r.v && r.v.relevant === false) {
+            // not a ship photo: say only that, and let the charge be refunded
+            await meter?.returned()
+            controller.enqueue(enc.encode('{"relevant":false,"findings":[]}'))
+          } else await send(whole)
+        } else if (failed) {
+          if (!sent) await meter?.returned()
+          fail(failed)
+        } else if (!sent) await meter?.returned()
+        controller.close()
+      }
       try {
         for (;;) {
           const { done, value } = await reader.read()
@@ -135,21 +197,28 @@ export async function handleAi(request, env, fetchImpl = fetch) {
             } catch {
               continue
             }
-            if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) controller.enqueue(enc.encode(ev.delta.text))
-            else if (ev.type === "error") {
-              fail(ev.error?.type === "overloaded_error" ? "rate_limited" : "upstream_error")
-              controller.close()
+            if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) {
+              if (jsonOnly) whole += ev.delta.text
+              else await send(ev.delta.text)
+            } else if (ev.type === "error") {
+              await finish(ev.error?.type === "overloaded_error" ? "rate_limited" : "upstream_error")
               return
             }
           }
         }
       } catch {
-        fail("upstream_error")
+        if (!finished) await finish("upstream_error")
+        return
       }
-      controller.close()
+      if (!finished) await finish(null)
     },
     cancel() {
       reader.cancel().catch(() => {})
+      // the user stopped it: if nothing was delivered, the call is given back
+      if (!sent && meter) {
+        const p = meter.returned()
+        if (ctx?.waitUntil) ctx.waitUntil(p)
+      }
     },
   })
   return new Response(stream, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } })

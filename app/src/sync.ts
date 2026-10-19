@@ -2,17 +2,14 @@
 //
 // The server keeps one copy per account with a version number. A device that saved on an old version gets
 // the newer copy back and merges it with its own using the rules below, then saves again.
-//  - Wallet, same account on both sides: every spend, grant and refund either device made is kept (the ledger
-//    is merged by entry id), and each credit bucket is worked out again from the spends both know about.
-//    Monthly refills that both devices granted for the same month count once.
-//  - Wallet, first sign-in on a device that was used signed-out: the account's wallet is used, and anything
-//    bought on this device (top-ups, a pass, a plan) is added to it. Free welcome credits don't stack.
 //  - Progress: never goes backwards. XP, streaks, stats take the higher value; badges, read stories and
 //    flashcard schedules are combined.
 //  - Other saved screens (profile, brief, ratings, chat): the most recently changed copy wins, per screen.
-import { LEDGER_MAX, PLAN_RANK, type Bucket, type Entry, type WalletState } from "@/economy"
+// Credits are not synced this way: signed in, the server keeps the wallet itself (worker/wallet.js), and
+// whatever a browser sends as a wallet is ignored.
 
 export const WALLET_KEY = "sr.wallet"
+export const WALLET_ACCOUNT_KEY = "sr.wallet.acct"
 export const PROGRESS_KEY = "sr.progress"
 /** Saved screens that follow the account. Photo thumbnails, the night setting and a half-done interview stay on the device. */
 export const EXTRA_KEYS = ["sr.profile", "sr.ratings", "sr.saved", "sr.lib", "sr.brief", "sr.ask", "sr.explain", "sr.currency", "sr.streak"]
@@ -20,126 +17,8 @@ export const MAX_EXTRA_CHARS = 80_000
 
 export type Extras = Record<string, { v: unknown; t: number }>
 export interface Synced {
-  wallet: WalletState | null
   progress: Record<string, unknown> | null
   extras: Extras
-}
-
-/* ---------------- wallet ---------------- */
-const latestPlanChange = (w: WalletState) =>
-  Math.max(w.plan.started || 0, ...w.ledger.filter((e) => e.kind === "plan").map((e) => e.at))
-
-/** Two copies of the same account's wallet → one. `a` is the server's copy, `b` this device's. */
-export function mergeWallet(a: WalletState, b: WalletState): WalletState {
-  // 1. ledger: union by id; a refund on either side marks the spend refunded
-  const byId = new Map<string, Entry>()
-  for (const e of [...a.ledger, ...b.ledger]) {
-    const o = byId.get(e.id)
-    byId.set(e.id, o ? { ...o, refunded: !!(o.refunded || e.refunded) } : { ...e })
-  }
-  const seen = new Set<string>()
-  const ledger: Entry[] = []
-  for (const e of [...byId.values()].sort((x, y) => y.at - x.at || (x.id < y.id ? -1 : 1))) {
-    // refills and expiries are logged by each device on its own, at the same moment with the same words
-    if (e.kind === "expire" || (e.kind === "plan" && e.delta > 0)) {
-      const k = `${e.kind}|${e.at}|${e.label}`
-      if (seen.has(k)) continue
-      seen.add(k)
-    }
-    ledger.push(e)
-  }
-
-  // 2. buckets: union by id; the same month's refill granted on both devices counts once
-  const buckets = new Map<string, Bucket>()
-  const lefts = new Map<string, number[]>()
-  for (const x of [...a.buckets, ...b.buckets]) {
-    if (!buckets.has(x.id)) buckets.set(x.id, { ...x })
-    lefts.set(x.id, [...(lefts.get(x.id) || []), x.left])
-  }
-  const alias = new Map<string, string>()
-  const refills = new Map<string, string>()
-  for (const x of [...buckets.values()].sort((p, q) => (p.id < q.id ? -1 : 1))) {
-    if (x.kind !== "monthly") continue
-    const k = `${x.at}|${x.expires}|${x.amount}`
-    const keep = refills.get(k)
-    if (!keep) {
-      refills.set(k, x.id)
-      continue
-    }
-    alias.set(x.id, keep)
-    lefts.set(keep, [...(lefts.get(keep) || []), ...(lefts.get(x.id) || [])])
-    buckets.delete(x.id)
-  }
-  // 3. what is left in each bucket: its amount minus every spend either device made from it,
-  //    never more than either copy had (older spends may have dropped off the ledger)
-  const used = new Map<string, number>()
-  for (const e of ledger) {
-    if (e.kind !== "spend" || e.refunded) continue
-    for (const [id, n] of e.alloc || []) {
-      const k = alias.get(id) ?? id
-      used.set(k, (used.get(k) || 0) + n)
-    }
-  }
-  for (const x of buckets.values()) {
-    const fromSpends = Math.max(0, x.amount - (used.get(x.id) || 0))
-    x.left = Math.min(fromSpends, Math.max(0, ...(lefts.get(x.id) || [0])))
-  }
-
-  // 4. plan: the copy that changed it last; the same plan keeps its furthest refill dates
-  const side = latestPlanChange(b) > latestPlanChange(a) ? b : a
-  let plan = { ...side.plan }
-  if (a.plan.id === b.plan.id && a.plan.cycle === b.plan.cycle)
-    plan = { ...plan, started: Math.max(a.plan.started, b.plan.started), renews: Math.max(a.plan.renews, b.plan.renews), term: Math.max(a.plan.term, b.plan.term) }
-  const pass = !a.pass ? b.pass : !b.pass ? a.pass : a.pass.until >= b.pass.until ? a.pass : b.pass
-
-  const usage = { ...a.usage }
-  for (const [k, v] of Object.entries(b.usage)) (usage as Record<string, number>)[k] = Math.max((usage as Record<string, number>)[k] || 0, v || 0)
-  const share =
-    a.share.month === b.share.month
-      ? { day: a.share.day > b.share.day ? a.share.day : b.share.day, month: a.share.month, n: Math.max(a.share.n, b.share.n), seen: [...new Set([...a.share.seen, ...b.share.seen])].slice(-40) }
-      : a.share.month > b.share.month
-        ? a.share
-        : b.share
-
-  return {
-    ...a,
-    created: Math.min(a.created, b.created),
-    buckets: [...buckets.values()],
-    ledger: ledger.slice(0, LEDGER_MAX),
-    unlocked: [...new Set([...a.unlocked, ...b.unlocked])],
-    decks: [...new Set([...a.decks, ...b.decks])],
-    plan,
-    pass,
-    usage,
-    share,
-    // an AI call still running belongs to the device that started it
-    holds: b.holds.filter((h) => byId.has(h.id) && !byId.get(h.id)!.refunded),
-    paid: Math.max(a.paid, b.paid),
-  }
-}
-
-/**
- * First sign-in on a device that was used signed-out, to an account that already has a wallet.
- * The account's wallet wins; purchases made on this device are added; its free credits are not.
- */
-export function adoptWallet(account: WalletState, device: WalletState): WalletState {
-  const have = new Set(account.buckets.map((x) => x.id))
-  const takePlan = PLAN_RANK[device.plan.id] > PLAN_RANK[account.plan.id]
-  const bought = device.buckets.filter(
-    (x) => !have.has(x.id) && (x.kind === "topup" || x.kind === "pass" || (takePlan && x.kind === "monthly" && x.at === device.plan.started))
-  )
-  const entries = device.ledger.filter((e) => (e.kind === "purchase" || (takePlan && e.kind === "plan" && e.at === device.plan.started)) && !account.ledger.some((y) => y.id === e.id))
-  const pass = !device.pass ? account.pass : !account.pass || device.pass.until > account.pass.until ? device.pass : account.pass
-  return {
-    ...account,
-    buckets: [...account.buckets, ...bought.map((x) => ({ ...x }))],
-    ledger: [...entries, ...account.ledger].sort((x, y) => y.at - x.at).slice(0, LEDGER_MAX),
-    unlocked: account.unlocked,
-    plan: takePlan ? { ...device.plan } : account.plan,
-    pass,
-    holds: [],
-    paid: account.paid + device.paid,
-  }
 }
 
 /* ---------------- progress ---------------- */
@@ -222,10 +101,7 @@ export function mergeExtras(a: Extras, b: Extras, fillOnly = false): Extras {
  * `sameAccount`: this device has synced with this account before (otherwise it was used signed-out).
  */
 export function mergeAll(server: Synced, local: Synced, sameAccount: boolean): Synced {
-  const wallet =
-    server.wallet && local.wallet ? (sameAccount ? mergeWallet(server.wallet, local.wallet) : adoptWallet(server.wallet, local.wallet)) : server.wallet ?? local.wallet
   return {
-    wallet,
     progress: server.progress && local.progress ? mergeProgress(server.progress, local.progress) : server.progress ?? local.progress,
     extras: mergeExtras(server.extras || {}, local.extras || {}, !sameAccount),
   }

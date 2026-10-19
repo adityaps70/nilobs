@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from "motion/react"
 import confetti from "canvas-confetti"
 
 import * as I from "@/components/icons"
-import { COSTS, EARN, useWallet } from "@/credits"
+import { EARN, useWallet } from "@/credits"
 import { CARDS, cardsFor, deckById, KIT, type CardI, type DeckId } from "@/fleet"
 import { RANK_TOPICS, type Topic } from "@/data"
 
@@ -339,6 +339,23 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
   const freezeCap = wallet.perks.paid ? 3 : 2
 
+  // Signed in: the account pays once for badges, levels and streaks reached on this device before
+  const claimed = useRef(false)
+  useEffect(() => {
+    if (wallet.mode !== "account") {
+      claimed.current = false
+      return
+    }
+    if (!wallet.ready || claimed.current) return
+    claimed.current = true
+    const p = ref.current
+    walletRef.current.claimAll({
+      badges: Object.keys(p.badges).filter((b) => !!p.badges[b as BadgeId]),
+      level: Math.max(p.levelPaid, levelOf(p.xp).n),
+      streakBest: Math.max(p.streak.best, p.streak.n),
+    })
+  }, [wallet.mode, wallet.ready])
+
   // Paid plans add free streak freezes once a month
   useEffect(() => {
     const per = wallet.perks.freezesPerMonth
@@ -388,7 +405,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
           if (n >= d && !p.milestones.includes(d)) {
             p = { ...p, milestones: [...p.milestones, d] }
             later.push(() => {
-              walletRef.current.earn(credits, `${d}-day streak`)
+              walletRef.current.earn("streak", d, `${d}-day streak`)
               celebrate({ kind: "credits", title: `${d}-day streak: +${credits} credits`, sub: "Keep the watch going", icon: "Flame" })
             })
           }
@@ -400,10 +417,13 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       const after = levelOf(p.xp)
       if (after.n > before.n && after.n > p.levelPaid) {
         let credits = 0
-        for (let L = p.levelPaid + 1; L <= after.n; L++) credits += EARN.level[L] || 0
+        const paidFrom = p.levelPaid + 1
+        for (let L = paidFrom; L <= after.n; L++) credits += EARN.level[L] || 0
         p = { ...p, levelPaid: after.n }
         later.push(() => {
-          if (credits) walletRef.current.earn(credits, `Reached level ${after.n}: ${after.name}`)
+          // one claim per level, so each pays once on the account however the levels are reached
+          for (let L = paidFrom; L <= after.n; L++)
+            if (EARN.level[L]) walletRef.current.earn("level", L, `Reached level ${L}: ${LEVELS.find((x) => x.n === L)?.name ?? ""}`)
           celebrate({ kind: "level", title: `Level ${after.n}: ${after.name}`, sub: credits ? `You levelled up. +${credits} credits` : "You levelled up", icon: "Crown" })
           pop(null, true)
         })
@@ -427,7 +447,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         for (const b of earn) {
           const def = BADGES.find((x) => x.id === b)!
           later.push(() => {
-            walletRef.current.earn(EARN.badge, `Badge: ${def.name}`)
+            walletRef.current.earn("badge", b, `Badge: ${def.name}`)
             celebrate({ kind: "badge", title: `Badge: ${def.name}`, sub: `${def.sub} · +${EARN.badge} credits`, icon: def.icon })
           })
         }
@@ -447,7 +467,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       act(0, (p) => ({ ...p, badges: { ...p.badges, [b]: todayKey() } }))
       const def = BADGES.find((x) => x.id === b)!
       setTimeout(() => {
-        walletRef.current.earn(EARN.badge, `Badge: ${def.name}`)
+        walletRef.current.earn("badge", b, `Badge: ${def.name}`)
         celebrate({ kind: "badge", title: `Badge: ${def.name}`, sub: `${def.sub} · +${EARN.badge} credits`, icon: def.icon })
       }, 0)
     },
@@ -544,7 +564,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         const mm = cur.missions.day === todayKey() ? cur.missions : null
         if (!mm || mm.claimed || MISSIONS.some((x) => mm[x.id] < x.target)) return
         act(0, (p) => ({ ...p, missions: { ...p.missions, claimed: true } }), XP.chest)
-        walletRef.current.earn(EARN.chest, "Daily missions chest")
+        walletRef.current.earn("chest", todayKey(), "Daily missions chest")
         if (!cur.badges.chest) badge("chest")
         pop(el, true)
         celebrate({ kind: "chest", title: `Chest opened: +${XP.chest} XP, +${EARN.chest} credits`, sub: "Come back tomorrow for three new missions", icon: "Gift" })
@@ -578,7 +598,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         act(0, (p) => ({ ...p, interviews: [{ ...r, at: Date.now() }, ...p.interviews].slice(0, 30), stats: { ...p.stats, interviews: p.stats.interviews + 1 } })),
       buyFreeze: () => {
         if (ref.current.streak.freezes >= freezeCap) return false
-        const rec = walletRef.current.charge(COSTS.freeze, "Streak freeze")
+        const rec = walletRef.current.charge({ kind: "freeze" })
         if (!rec) return false
         const next = { ...ref.current, streak: { ...ref.current.streak, freezes: ref.current.streak.freezes + 1 } }
         ref.current = next

@@ -3,6 +3,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import worker from "../worker/index.js"
 import { handleAuth, resetGoogleKeys, resetSchemaFlag, verifyGoogleToken } from "../worker/auth.js"
+import { resetWalletSchemaFlag } from "../worker/wallet.js"
 import { fakeD1, fakeGoogle } from "./fakes.mjs"
 
 const SITE = "https://nilobs.com"
@@ -21,6 +22,7 @@ globalThis.fetch = async (url, init) => {
 
 const freshEnv = () => {
   resetSchemaFlag()
+  resetWalletSchemaFlag()
   return { DB: fakeD1(), GOOGLE_CLIENT_ID: CLIENT, ANTHROPIC_API_KEY: "k", ASSETS: { fetch: async () => new Response("site") }, NILOBS_RATE_PER_MINUTE: "1000", NILOBS_AUTH_PER_MINUTE: "1000" }
 }
 const req = (path, { method = "GET", body, cookie, origin = SITE } = {}) =>
@@ -97,7 +99,11 @@ test("AI and voice need a signed-in user once sign-in is set up", async () => {
   const voice = await worker.fetch(req("/api/voice", { method: "POST", body: { text: "hi" } }), env)
   assert.equal(voice.status, 401)
   const { cookie } = await signIn(env)
-  const ok = await ask(cookie)
+  // signed in, but no paid ticket: still no
+  assert.equal((await ask(cookie)).status, 402)
+  const spend = await worker.fetch(req("/api/wallet/spend", { method: "POST", cookie, body: { item: { kind: "askQuick" }, ref: "ref-test-0001" } }), env)
+  assert.equal(spend.status, 200)
+  const ok = await worker.fetch(req("/api/ai", { method: "POST", cookie, body: { ticket: "ref-test-0001", tier: "quick", messages: [{ role: "user", content: "hi" }] } }), env)
   assert.equal(ok.status, 200)
   assert.equal(await ok.text(), "Hi")
 })
@@ -108,17 +114,18 @@ test("synced state: first save, version checks, conflicts return the newer copy"
   const get = async () => (await worker.fetch(req("/api/state", { cookie }), env)).json()
   const put = (base, data) => worker.fetch(req("/api/state", { method: "PUT", cookie, body: { base, data } }), env)
   assert.deepEqual(await get(), { version: 0, data: null })
-  let r = await put(0, { wallet: { a: 1 } })
+  let r = await put(0, { progress: { a: 1 } })
   assert.deepEqual(await r.json(), { version: 1 })
-  r = await put(1, { wallet: { a: 2 } })
+  r = await put(1, { progress: { a: 2 }, wallet: { buckets: [{ left: 999999 }] } })
   assert.deepEqual(await r.json(), { version: 2 })
+  assert.deepEqual((await get()).data, { progress: { a: 2 } }, "a wallet sent with synced state is dropped")
   // a second device still on version 1 is told about version 2
-  r = await put(1, { wallet: { a: 99 } })
+  r = await put(1, { progress: { a: 99 } })
   assert.equal(r.status, 409)
-  assert.deepEqual(await r.json(), { version: 2, data: { wallet: { a: 2 } } })
-  r = await put(0, { wallet: { a: 98 } })
+  assert.deepEqual(await r.json(), { version: 2, data: { progress: { a: 2 } } })
+  r = await put(0, { progress: { a: 98 } })
   assert.equal(r.status, 409)
-  assert.deepEqual(await get(), { version: 2, data: { wallet: { a: 2 } } })
+  assert.deepEqual(await get(), { version: 2, data: { progress: { a: 2 } } })
   // limits and bad input
   assert.equal((await put(2, { big: "x".repeat(700000) })).status, 413)
   assert.equal((await put("2", [])).status, 400)

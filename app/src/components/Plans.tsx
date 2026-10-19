@@ -1,5 +1,9 @@
-// Plans, top-ups and the wallet screen. Checkout is simulated in this prototype: nothing is charged.
+// Plans, top-ups and the wallet screen.
+// Signed in on nilobs.com, purchases are real: Razorpay for rupees, Stripe for dollars, confirmed by the server.
+// Plans are prepaid and don't renew by themselves. Elsewhere (the Claude artifact) checkout is simulated.
 import { useEffect, useRef, useState, type ReactNode } from "react"
+import { HOSTED } from "@/ai"
+import { useAuth } from "@/auth"
 import { AnimatePresence, motion } from "motion/react"
 import confetti from "canvas-confetti"
 
@@ -9,7 +13,7 @@ import { BorderBeam } from "@/components/magicui/border-beam"
 import { Section, TopBar, Scroll } from "@/components/ui"
 import { IconTile, type TileColor } from "@/components/topicIcons"
 import { COSTS, EARN, PASS, PLANS, TOPUPS, fmtPrice, useWallet, type Currency, type Cycle, type PlanId } from "@/credits"
-import { PLAN_ORDER, dayOf, perMonth } from "@/economy"
+import { CYCLE_DAYS, DAY, PLAN_ORDER, PLAN_RANK, YEAR_CYCLES, canBuy, dayOf, paidUntil, paidUntil as paidUntilOf, perMonth, productKey } from "@/economy"
 import { LEVELS, useProgress } from "@/progress"
 import type { AppScreen } from "@/nav"
 
@@ -90,6 +94,8 @@ export function PlansSheet() {
   const [pick, setPick] = useState<Pick>({ kind: "plan", id: "watch" })
   const [stage, setStage] = useState<"pick" | "pay" | "done">("pick")
   const [done, setDone] = useState("")
+  const [err, setErr] = useState("")
+  const auth = useAuth()
   const btn = useRef<HTMLButtonElement>(null)
   // each purchase gets a token; closing the sheet or starting another purchase cancels the older one
   const token = useRef(0)
@@ -97,8 +103,9 @@ export function PlansSheet() {
 
   useEffect(() => {
     if (!w.sheet) return
-    setStage("pick")
-    setDone("")
+    setStage(w.sheet.done ? "done" : "pick")
+    setDone(w.sheet.done || "")
+    setErr("")
     token.current++
     setCycle(w.sheet.cycle ?? (w.plan.id === "free" ? "monthly" : w.state.plan.cycle))
     const sel = w.sheet.select
@@ -121,48 +128,56 @@ export function PlansSheet() {
     setTab(t)
     setPick(t === "topup" ? { kind: "topup", id: "t500" } : { kind: "plan", id: defaultPlan() })
   }
-  const change = pick.kind === "plan" ? w.changeKind(pick.id, cycle) : null
-  const isCurrent = change === "same"
+  const now = Date.now()
+  const key = pick.kind === "plan" ? productKey("plan", pick.id, cycle) : pick.kind === "pass" ? "pass" : productKey("topup", pick.id)
+  const can = canBuy(w.state, key, now)
   const fmtD = (t: number) => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-  const boundary = w.state.plan.cycle === "annual" ? w.state.plan.term : w.state.plan.renews
+  const length = (cycle === "annual" ? YEAR_CYCLES : 1) * CYCLE_DAYS * DAY
+  const until = paidUntil(w.state)
+  const sameRank = pick.kind === "plan" && pick.id === w.plan.id
+  const upgrade = pick.kind === "plan" && w.plan.id !== "free" && PLAN_RANK[pick.id] > PLAN_RANK[w.plan.id]
+  const unusedMonths = upgrade && until ? Math.max(0, Math.ceil((until - w.state.plan.renews) / (CYCLE_DAYS * DAY))) : 0
   const effect =
-    pick.kind !== "plan" ? ""
-      : change === "upgrade" ? (w.balance > 0 ? `Starts today. Your ${w.balance.toLocaleString("en-IN")} credits stay, and ${PLANS[pick.id].credits.toLocaleString("en-IN")} more arrive now.` : `Starts today with ${PLANS[pick.id].credits.toLocaleString("en-IN")} credits.`)
-      : change === "downgrade" ? `You keep ${w.plan.name} and its credits until ${fmtD(boundary)}, then move to ${PLANS[pick.id].name}.`
-      : change === "cycle" ? `Your credits stay as they are. ${cycle === "annual" ? `You're billed yearly from now; refills stay monthly.` : `Monthly billing starts when your current year ends.`}`
-      : change === "keep" ? `Your ${w.plan.name} plan carries on as before.`
-      : ""
+    !can.ok ? can.why
+      : pick.kind !== "plan" ? ""
+      : sameRank ? `Adds ${cycle === "annual" ? "a year" : "a month"}: ${w.plan.name} then runs until ${fmtD(Math.max(until ?? now, now) + length)}.`
+      : upgrade ? `Starts today with ${PLANS[pick.id].credits.toLocaleString("en-IN")} credits, then the same every 30 days until ${fmtD(now + length)}.${unusedMonths ? ` The ${unusedMonths === 1 ? "month" : `${unusedMonths} months`} of ${w.plan.name} still to come ${unusedMonths === 1 ? "becomes" : "become"} ${(unusedMonths * w.plan.credits).toLocaleString("en-IN")} credits that don't expire.` : ""}`
+      : `Starts today with ${PLANS[pick.id].credits.toLocaleString("en-IN")} credits, then the same every 30 days until ${fmtD(now + length)}. It doesn't renew by itself.`
   const amount =
     pick.kind === "plan" ? PLANS[pick.id].price[cur][cycle] : pick.kind === "pass" ? PASS.price[cur] : TOPUPS.find((t) => t.id === pick.id)!.price[cur]
   const what =
-    pick.kind === "plan" ? `${PLANS[pick.id].name}, ${fmtPrice(amount, cur)}/${cycle === "annual" ? "year" : "month"}` : pick.kind === "pass" ? `${PASS.name}, ${fmtPrice(amount, cur)} once` : `${TOPUPS.find((t) => t.id === pick.id)!.credits} credits, ${fmtPrice(amount, cur)}`
-  const pay = () => {
-    if (stage === "pay" || isCurrent) return
-    const item = pick
-    const cyc = cycle
-    const kind = change
-    // keeping a plan or scheduling a downgrade involves no payment
-    const instant = kind === "keep" || kind === "downgrade"
+    pick.kind === "plan" ? `${PLANS[pick.id].name}, ${fmtPrice(amount, cur)} for ${cycle === "annual" ? "a year" : "a month"}` : pick.kind === "pass" ? `${PASS.name}, ${fmtPrice(amount, cur)} once` : `${TOPUPS.find((t) => t.id === pick.id)!.credits} credits, ${fmtPrice(amount, cur)}`
+  // how this purchase is paid: a real checkout (signed in), sign in first, or practice (no charge)
+  const other: Currency = cur === "INR" ? "USD" : "INR"
+  const via: "razorpay" | "stripe" | "simulated" | "closed" | "signin" | "loading" | "practice" =
+    w.mode === "account" ? (!w.ready ? "loading" : w.checkout?.[cur] ?? "closed")
+      : HOSTED && auth.status === "out" ? "signin"
+      : HOSTED && auth.status === "loading" ? "loading"
+      : "practice"
+  const pay = async () => {
+    if (stage === "pay" || !can.ok || via === "closed" || via === "loading") return
+    if (via === "signin") {
+      auth.prompt("Sign in with Google to buy credits or a plan")
+      return
+    }
     const my = ++token.current
     setStage("pay")
-    setTimeout(() => {
-      if (my !== token.current) return // closed or replaced while processing: nothing happens
-      if (item.kind === "plan") w.subscribe(item.id, cyc)
-      else if (item.kind === "pass") w.buyPass()
-      else w.buyTopUp(item.id)
-      const pn = item.kind === "plan" ? PLANS[item.id] : null
-      setDone(
-        item.kind === "plan"
-          ? kind === "keep" ? `You're staying on ${pn!.name}.`
-            : kind === "downgrade" ? `Done. You keep ${w.plan.name} until ${fmtD(boundary)}, then move to ${pn!.name}.`
-            : kind === "cycle" ? `${pn!.name} is now billed ${cyc === "annual" ? "yearly" : "monthly"}. Your credits are unchanged.`
-            : `You're on ${pn!.name}. ${pn!.credits.toLocaleString("en-IN")} credits are in your wallet and refill every 30 days.`
-          : item.kind === "pass" ? `Your Voyage pass is active: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days} days.`
-          : `${TOPUPS.find((t) => t.id === item.id)!.credits} credits added. Top-ups never expire.`
-      )
+    setErr("")
+    if (via === "practice") {
+      await new Promise((r) => setTimeout(r, 900))
+      if (my !== token.current) return // closed while "processing": nothing is bought
+    }
+    const r = await w.buy(key)
+    if (my !== token.current) return // the sheet was closed meanwhile (what was bought is still in the wallet)
+    if ("redirect" in r) return // on the way to Stripe's checkout page
+    if (r.ok) {
+      setDone(r.message)
       setStage("done")
-      if (!instant) burst(btn.current)
-    }, instant ? 300 : 1100)
+      burst(btn.current)
+    } else {
+      setStage("pick")
+      if (!r.cancelled) setErr(r.error || "The payment didn't go through. Nothing was charged; try again.")
+    }
   }
   const close = () => {
     token.current++
@@ -277,23 +292,38 @@ export function PlansSheet() {
                     <p className="text-[12px] leading-snug text-mute">Plans work out cheaper per credit. Top-ups are for when you run short, and they never expire.</p>
                   </div>
                 )}
-                <button ref={btn} type="button" onClick={pay} disabled={stage === "pay" || isCurrent} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-signal text-[15px] font-semibold text-white disabled:opacity-60">
+                <button ref={btn} type="button" onClick={pay} disabled={stage === "pay" || !can.ok || via === "closed" || via === "loading"} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-signal text-[15px] font-semibold text-white disabled:opacity-60">
                   {stage === "pay" ? (
                     <>
                       <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }} className="size-4 rounded-full border-2 border-white/40 border-t-white" />
-                      Processing…
+                      {via === "practice" || via === "simulated" ? "Processing…" : "Waiting for the payment…"}
                     </>
-                  ) : isCurrent ? "This is your plan" : pick.kind === "plan" && change === "keep" ? (
-                    `Keep ${PLANS[pick.id].name}`
-                  ) : pick.kind === "plan" && change === "downgrade" ? (
-                    `Switch to ${PLANS[pick.id].name} on ${fmtD(boundary)}`
+                  ) : !can.ok ? (
+                    "Not available yet"
+                  ) : via === "closed" ? (
+                    `Payments in ${cur === "INR" ? "rupees" : "dollars"} open soon`
+                  ) : via === "loading" ? (
+                    "One moment…"
+                  ) : via === "signin" ? (
+                    "Sign in with Google to buy"
                   ) : (
-                    <>{pick.kind === "plan" ? (change === "cycle" ? `Switch to ${cycle === "annual" ? "yearly" : "monthly"} billing` : w.plan.id === "free" ? `Start ${PLANS[pick.id].name}` : `Upgrade to ${PLANS[pick.id].name}`) : pick.kind === "pass" ? "Get the Voyage pass" : "Buy credits"} · {fmtPrice(amount, cur)}{pick.kind === "plan" ? (cycle === "annual" ? "/year" : "/month") : ""}</>
+                    <>{pick.kind === "plan" ? (sameRank ? `Add ${cycle === "annual" ? "a year" : "a month"}` : upgrade ? `Upgrade to ${PLANS[pick.id].name}` : `Get ${PLANS[pick.id].name}`) : pick.kind === "pass" ? "Get the Voyage pass" : "Buy credits"} · {fmtPrice(amount, cur)}</>
                   )}
                 </button>
                 {effect && <p className="-mt-1 text-center text-[12.5px] leading-snug font-medium text-ink">{effect}</p>}
+                {err && <p role="alert" className="-mt-1 text-center text-[12.5px] leading-snug font-medium text-signal-ink">{err}</p>}
+                {via === "closed" && w.checkout?.[other] && (
+                  <button type="button" onClick={() => w.setCurrency(other)} className="-mt-1 self-center text-[12.5px] font-semibold text-primary underline underline-offset-2">Pay in {other === "INR" ? "rupees (₹)" : "dollars ($)"} instead</button>
+                )}
                 <p className="text-center text-[11.5px] leading-snug text-mute">
-                  Prototype: no payment is taken ({what}). {pick.kind === "plan" ? "Cancel any time; the plan runs to the end of the month or year you paid for." : ""} {cur === "INR" ? "Prices include GST." : ""}
+                  {via === "razorpay" ? "Paid securely through Razorpay: UPI, cards, netbanking and wallets. "
+                    : via === "stripe" ? "Paid securely by card through Stripe. "
+                    : via === "simulated" ? `Test mode: no payment is taken (${what}). `
+                    : via === "practice" ? `Prototype: no payment is taken (${what}). `
+                    : ""}
+                  {pick.kind === "plan" ? "Plans are paid up front and don't renew by themselves. " : ""}
+                  {cur === "INR" ? "Prices include GST." : ""}
+                  {HOSTED && (via === "razorpay" || via === "stripe") && <> By paying you agree to the <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a> and <a href="/refunds" target="_blank" rel="noopener" className="underline">refund policy</a>.</>}
                 </p>
                 <p className="text-center text-[12px] text-mute">
                   Or earn free credits: daily chest +{EARN.chest}, badges +{EARN.badge}, level-ups, and +{EARN.share} for each debrief you share.
@@ -335,6 +365,7 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
   const w = useWallet()
   const p = useProgress()
   const plan = w.state.plan
+  const planEnd = paidUntilOf(w.state)
   const paidUntil = w.state.pass ? fmtDay(w.state.pass.until) : null
   return (
     <>
@@ -379,12 +410,9 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
             <IconTile icon={w.plan.id === "command" ? I.Crown : w.plan.id === "watch" ? I.Anchor : I.Compass} color={w.plan.id === "free" ? "slate" : "amber"} size={42} />
           </div>
           <span className="text-[13px] leading-snug text-mute">
-            {plan.cancelAt
-              ? `Cancelled. Your ${w.plan.name} perks and credits last until ${fmtDay(plan.cancelAt)}, then you move to Free.`
-              : w.plan.id === "free"
-                ? `${PLANS.free.credits} free credits arrive on ${fmtDay(plan.renews)}.`
-                : `${w.plan.credits.toLocaleString("en-IN")} credits refill on ${fmtDay(plan.renews)}. ${plan.cycle === "annual" ? `Billed yearly; the year runs to ${fmtDay(plan.term)}.` : "Billed monthly."}`}
-            {plan.next ? ` Moves to ${PLANS[plan.next.id].name} on ${fmtDay(plan.cycle === "annual" ? plan.term : plan.renews)}.` : ""}
+            {w.plan.id === "free"
+              ? `${PLANS.free.credits} free credits arrive on ${fmtDay(plan.renews)}.`
+              : `Paid up to ${fmtDay(planEnd ?? plan.term)}. ${plan.renews < (planEnd ?? plan.term) ? `${w.plan.credits.toLocaleString("en-IN")} credits refill on ${fmtDay(plan.renews)}. ` : ""}It doesn't renew by itself; then you move to Free.`}
             {paidUntil ? ` Voyage pass active until ${paidUntil}.` : ""}
           </span>
           <ul className="flex flex-col gap-1.5">
@@ -392,11 +420,8 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
               <li key={x} className="flex gap-2 text-[13px] leading-snug"><I.Check size={15} className="mt-0.5 shrink-0 text-sea" />{x}</li>
             ))}
           </ul>
-          {w.plan.id !== "free" && !plan.cancelAt && (
-            <button type="button" onClick={w.cancelPlan} className="self-start text-[12.5px] font-semibold text-mute underline underline-offset-2">Cancel plan</button>
-          )}
-          {(plan.cancelAt || plan.next) && (
-            <button type="button" onClick={() => w.subscribe(w.plan.id, plan.cycle)} className="self-start text-[12.5px] font-semibold text-primary">Keep my {w.plan.name} plan</button>
+          {w.plan.id !== "free" && (
+            <button type="button" onClick={() => w.openPlans({ tab: "plans", select: w.plan.id, cycle: plan.cycle })} className="self-start text-[12.5px] font-semibold text-primary">Add more time to {w.plan.name}</button>
           )}
         </section>
 
@@ -460,7 +485,14 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
             ))}
           </ol>
         </Section>
-        <p className="text-center text-[11.5px] leading-snug text-mute">Prototype: purchases are simulated. Signed in, your credits follow your Google account; signed out, they stay in this browser. Plan dates use your device's clock. Last checked {dayOf(Date.now())}.</p>
+        <p className="text-center text-[11.5px] leading-snug text-mute">
+          {w.mode === "account"
+            ? "Your credits are kept on your NilObs account, so they're the same on every device. Payments go through Razorpay (₹) or Stripe ($)."
+            : HOSTED
+              ? "Signed out, these practice credits stay in this browser. Sign in with Google to buy credits and use the AI."
+              : "Prototype: purchases are simulated. Credits are kept in this browser."}{" "}
+          Last checked {dayOf(Date.now())}.
+        </p>
       </Scroll>
     </>
   )

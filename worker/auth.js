@@ -10,10 +10,12 @@
 //   POST   /api/auth/google   { credential } → { user }   (sets the session cookie)
 //   POST   /api/auth/logout
 //   GET    /api/me            → { user } | 401
-//   DELETE /api/me            deletes the account, its sessions and its saved state
+//   DELETE /api/me            deletes the account, its sessions, saved state and wallet (payment records are
+//                             kept for the accounts, without name or email)
 //   GET    /api/state         → { version, data }
 //   PUT    /api/state         { base, data } → { version } | 409 { version, data }
 import { limited, originAllowed, reply } from "./guard.js"
+import { ensureWalletSchema, startKey } from "./wallet.js"
 
 const GOOGLE_CERTS = "https://www.googleapis.com/oauth2/v3/certs"
 const ISSUERS = ["accounts.google.com", "https://accounts.google.com"]
@@ -192,7 +194,12 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
   }
 
   if (path === "/api/me" && method === "DELETE") {
+    await ensureWalletSchema(env.DB)
+    const row = await env.DB.prepare("SELECT google_sub FROM users WHERE id = ?").bind(s.user.id).first()
     await env.DB.batch([
+      // signing up again with the same Google account doesn't bring back the free starting credits
+      ...(row?.google_sub ? [env.DB.prepare("INSERT OR IGNORE INTO starts (key, at) VALUES (?, ?)").bind(await startKey(row.google_sub), now)] : []),
+      env.DB.prepare("DELETE FROM wallets WHERE user_id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM user_state WHERE user_id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM users WHERE id = ?").bind(s.user.id),
@@ -216,7 +223,9 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
     }
     const base = Number(body?.base)
     if (!Number.isInteger(base) || base < 0 || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) return reply(400, { error: "Need base and data" })
-    const data = JSON.stringify(body.data)
+    // credits live in the server wallet (worker/wallet.js): a wallet sent here is ignored
+    const { wallet: _ignored, ...rest } = body.data
+    const data = JSON.stringify(rest)
     if (data.length > MAX_STATE_CHARS) return reply(413, { error: "Too much to save" })
     // only one writer wins per version: the other gets the newer copy back and merges
     const res =

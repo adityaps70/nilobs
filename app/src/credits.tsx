@@ -1,20 +1,27 @@
-// Wallet: the React side of the credit economy in economy.ts. Kept per browser in localStorage
-// for this prototype; the same rules can run on a server once there are real accounts.
+// Wallet: the React side of the credit economy in economy.ts. Two homes for the credits:
+// - Signed in on nilobs.com ("account"): the server keeps the wallet (worker/wallet.js). Prices, balances,
+//   purchases and refunds are worked out there; this browser only shows a copy. A charge appears on screen
+//   at once and the server confirms it a moment later; the AI or voice call it pays for carries its ticket.
+//   Editing this browser's storage changes nothing the server will accept.
+// - Signed out, or in the Claude artifact ("local"): a wallet kept in this browser. In the artifact the AI
+//   runs on the viewer's own Claude access, so these are practice credits and purchases are simulated.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { motion } from "motion/react"
 
 import * as I from "@/components/icons"
 import { cn } from "@/lib/utils"
 import { STORIES } from "@/stories"
+import { HOSTED } from "@/ai"
+import { UNAUTHORIZED_EVENT, useAuth } from "@/auth"
+import { trackTicket, readyTicket } from "@/tickets"
 import {
-  COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, balance as balanceOf, breakdown, buyPass as ecoPass, buyTopUp as ecoTopUp, cancelPlan as ecoCancel,
-  changeKind as ecoChangeKind, defaultCurrency, earn as ecoEarn, expiringSoon, fmtPrice, migrate, perks as perksOf, recordShare, refund as ecoRefund,
-  settle as ecoSettle, shareStatus, spend as ecoSpend, subscribe as ecoSubscribe, tick, type Currency, type Cycle, type Entry, type Plan, type PlanId,
-  type Usage, type UsageKey, type WalletState,
+  COSTS, EARN, ITEMS, PASS, PLANS, TOPUPS, WELCOME, balance as balanceOf, breakdown, defaultCurrency, earn as ecoEarn, expiringSoon, fmtPrice,
+  grantPurchase, itemCost, migrate, perks as perksOf, product, recordShare, refund as ecoRefund, settle as ecoSettle, shareStatus,
+  spend as ecoSpend, tick, type Currency, type Cycle, type Entry, type Item, type ItemKind, type Plan, type PlanId, type Usage, type WalletState,
 } from "@/economy"
 
 export { COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, fmtPrice }
-export type { Currency, Cycle, PlanId }
+export type { Currency, Cycle, Item, PlanId }
 /** Free credits a new user starts with (welcome + first month on Free). */
 export const WELCOME_CREDITS = WELCOME.credits + PLANS.free.credits
 
@@ -33,9 +40,18 @@ interface Sheet {
   tab: SheetTab
   select?: string
   cycle?: Cycle
+  /** Show the sheet already finished, with this message (after coming back from a card payment). */
+  done?: string
 }
+export type WalletMode = "account" | "local"
+/** How a currency is paid on the server: Razorpay (₹), Stripe ($), a test switch, or not open yet. */
+export type CheckoutMode = "razorpay" | "stripe" | "simulated" | null
+export type EarnKind = "badge" | "level" | "streak" | "chest"
+export type BuyResult = { ok: true; message: string } | { ok: false; cancelled?: boolean; error?: string } | { redirect: true }
+
 /** One id per page load, so charges held by a page that has closed can be refunded. */
 const PAGE = Math.random().toString(36).slice(2, 10)
+const newRef = () => (crypto.randomUUID?.() ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`).replace(/-/g, "").slice(0, 24)
 
 export interface Wallet {
   state: WalletState
@@ -49,28 +65,36 @@ export interface Wallet {
   currency: Currency
   setCurrency: (c: Currency) => void
   flash: number
+  /** "account": the server keeps this wallet; "local": this browser does. */
+  mode: WalletMode
+  /** False until the account's wallet has loaded from the server at least once. */
+  ready: boolean
+  /** Account mode: how each currency can be paid. Null in local mode. */
+  checkout: Record<Currency, CheckoutMode> | null
+  /** What an item costs this wallet now (null: not available, e.g. Expert without Command). */
+  price: (item: Item) => number | null
   /**
-   * Take credits for something. Returns a receipt id, or null (and opens the plans sheet) if short.
-   * With `hold`, the charge is refunded automatically unless `settle` is called (for AI calls).
+   * Pay for something. Returns a receipt (in account mode, the ticket the AI call sends), or null when
+   * there aren't enough credits (the plans sheet opens). AI charges are given back if no answer arrives.
    */
-  charge: (cost: number, label: string, usage?: UsageKey, opts?: { hold?: boolean }) => string | null
-  /** The AI call behind a held charge finished: keep the charge. */
+  charge: (item: Item, opts?: { note?: string }) => string | null
+  /** The AI call behind a charge finished: keep it. */
   settle: (receipt: string | null) => void
-  /** Give back a charge whose AI call failed. */
-  refund: (receipt: string | null, usage?: UsageKey) => void
-  changeKind: (id: PlanId, cycle: Cycle) => ReturnType<typeof ecoChangeKind>
-  /** Credits earned by learning. */
-  earn: (n: number, label: string) => void
-  buyTopUp: (id: string) => void
-  buyPass: () => void
-  subscribe: (id: PlanId, cycle: Cycle) => void
-  cancelPlan: () => void
+  /** Give back a charge whose AI call failed (refused by the server once anything was delivered). */
+  refund: (receipt: string | null) => void
+  /** Credits earned by learning: each badge, level and streak milestone once, a chest a day. */
+  earn: (kind: EarnKind, key: string | number, label: string) => void
+  /** After signing in: pay out badges, levels and streaks reached on this device before. */
+  claimAll: (c: { badges: string[]; level: number; streakBest: number }) => void
+  /** Buy a product ("topup:t500", "pass", "plan:watch:monthly"). */
+  buy: (key: string) => Promise<BuyResult>
   unlock: (storyId: number) => boolean
   isUnlocked: (storyId: number) => boolean
   hasDeck: (id: string, cost: number) => boolean
   unlockDeck: (id: string, cost: number, name: string) => boolean
   share: (text?: string) => ReturnType<typeof shareStatus>
   recordShare: (text: string) => boolean
+  refresh: () => void
   sheet: Sheet | null
   openPlans: (o?: Partial<Sheet>) => void
   /** Older name, kept for callers that only want to open the sheet. */
@@ -79,6 +103,7 @@ export interface Wallet {
 }
 
 const KEY = "sr.wallet"
+const ACCT_KEY = "sr.wallet.acct"
 const CUR_KEY = "sr.currency"
 function load(now: number): WalletState {
   try {
@@ -89,13 +114,104 @@ function load(now: number): WalletState {
   }
 }
 
+/* ---------------- the account's wallet on the server ---------------- */
+interface AcctView {
+  wallet: WalletState
+  version: number
+  claims: string[]
+  checkout: Record<Currency, CheckoutMode>
+}
+type ApiErr = { status: number; code: string; message: string; need?: number; have?: number }
+async function walletApi<T>(path: string, body?: unknown): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method: body === undefined ? "GET" : "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch {
+    throw { status: 0, code: "offline", message: "No connection. Try again when you have signal." } satisfies ApiErr
+  }
+  let j: Record<string, unknown> | null = null
+  try {
+    j = (await res.json()) as Record<string, unknown>
+  } catch {
+    /* empty */
+  }
+  if (res.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  if (!res.ok) throw { status: res.status, code: String(j?.code || "error"), message: String(j?.error || "Something went wrong. Try again."), need: Number(j?.need) || undefined, have: Number(j?.have) || undefined } satisfies ApiErr
+  return j as T
+}
+const okView = (v: unknown): v is AcctView => !!v && typeof v === "object" && !!(v as AcctView).wallet && Array.isArray((v as AcctView).wallet.buckets)
+function readAcct(user: string): AcctView | null {
+  try {
+    const c = JSON.parse(localStorage.getItem(ACCT_KEY) || "null")
+    return c && c.user === user && okView(c.view) ? { ...c.view, wallet: migrate(c.view.wallet, Date.now()) } : null
+  } catch {
+    return null
+  }
+}
+function writeAcct(user: string, view: AcctView) {
+  try {
+    localStorage.setItem(ACCT_KEY, JSON.stringify({ user, view }))
+  } catch {
+    /* storage full or blocked: the copy lives in memory */
+  }
+}
+
+/* ---------------- Razorpay Checkout (₹) ---------------- */
+type RazorpayOpts = Record<string, unknown>
+type RazorpayCtor = new (o: RazorpayOpts) => { open: () => void; on: (ev: string, fn: (r: unknown) => void) => void }
+let rzp: Promise<RazorpayCtor> | null = null
+function loadRazorpay(): Promise<RazorpayCtor> {
+  rzp ??= new Promise<RazorpayCtor>((resolve, reject) => {
+    const w = window as unknown as { Razorpay?: RazorpayCtor }
+    if (w.Razorpay) return resolve(w.Razorpay)
+    const s = document.createElement("script")
+    s.src = "https://checkout.razorpay.com/v1/checkout.js"
+    s.async = true
+    s.onload = () => (w.Razorpay ? resolve(w.Razorpay) : reject(new Error("no razorpay")))
+    s.onerror = () => {
+      rzp = null
+      reject(new Error("blocked"))
+    }
+    document.head.appendChild(s)
+  })
+  return rzp
+}
+
+/** What a purchase gave, for the sheet's "done" message. */
+function boughtMessage(key: string): string {
+  const p = product(key)
+  if (!p) return "Done."
+  if (p.kind === "topup") return `${p.credits.toLocaleString("en-IN")} credits added. Top-ups never expire.`
+  if (p.kind === "pass") return `Your Voyage pass is active: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days} days.`
+  return `${p.name} is yours. ${p.credits.toLocaleString("en-IN")} credits now, and again every 30 days while it runs.`
+}
+
 const Ctx = createContext<Wallet | null>(null)
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<WalletState>(() => load(Date.now()))
-  const ref = useRef(state)
+  const auth = useAuth()
+  const account = HOSTED && auth.status === "in" && auth.user ? auth.user.id : ""
+  const mode: WalletMode = account ? "account" : "local"
+
+  const [local, setLocal] = useState<WalletState>(() => load(Date.now()))
+  const [acct, setAcct] = useState<AcctView | null>(null)
+  const [acctFor, setAcctFor] = useState("")
+  const [ready, setReady] = useState(false)
+  // until the account's wallet arrives, show a new account's (never this browser's signed-out one)
+  const placeholder = useMemo(() => migrate(null, Date.now()), [])
+  const shown = mode === "account" ? (acctFor === account && acct ? acct.wallet : placeholder) : local
+  const ref = useRef<WalletState>(shown)
   const [flash, setFlash] = useState(0)
   const [sheet, setSheet] = useState<Sheet | null>(null)
+  const inflight = useRef(0)
+  const acctRef = useRef(account)
+  acctRef.current = account
+  const kinds = useRef(new Map<string, ItemKind>())
   const [currency, setCur] = useState<Currency>(() => {
     try {
       const c = localStorage.getItem(CUR_KEY)
@@ -114,17 +230,57 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  /** Every change goes through here, so rapid double taps always see the latest balance. */
+  // Switching between this browser's wallet and the account's (sign in, sign out)
+  useEffect(() => {
+    if (!account) {
+      setAcct(null)
+      setAcctFor("")
+      setReady(false)
+      ref.current = local
+      return
+    }
+    const cached = readAcct(account)
+    setAcct(cached)
+    setAcctFor(account)
+    setReady(false)
+    ref.current = cached ? cached.wallet : placeholder
+  }, [account]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Every local change goes through here, so rapid double taps always see the latest balance. */
   const commit = useCallback((next: WalletState, bump = true) => {
     ref.current = next
-    setState(next)
+    if (acctRef.current) setAcct((a) => (a ? { ...a, wallet: next } : { wallet: next, version: -1, claims: [], checkout: { INR: null, USD: null } }))
+    else setLocal(next)
     if (bump) setFlash((f) => f + 1)
   }, [])
 
+  /** The server's copy arrived: it replaces whatever this browser showed. */
+  const apply = useCallback((v: unknown, user: string, bump = false) => {
+    if (!okView(v) || user !== acctRef.current) return
+    const view: AcctView = { wallet: v.wallet, version: v.version, claims: v.claims || [], checkout: v.checkout || { INR: null, USD: null } }
+    ref.current = view.wallet
+    setAcct(view)
+    setReady(true)
+    writeAcct(user, view)
+    if (bump) setFlash((f) => f + 1)
+  }, [])
+
+  const refresh = useCallback(() => {
+    const user = acctRef.current
+    if (!user) return
+    walletApi<AcctView>("/api/wallet")
+      .then((v) => {
+        // a charge on its way would be undone on screen by an older copy: its own reply brings the news
+        if (!inflight.current) apply(v, user)
+      })
+      .catch(() => {})
+  }, [apply])
+
+  // This browser's wallet: save it, follow other tabs, expire credits while open
   const written = useRef("")
   useEffect(() => {
     try {
-      const json = JSON.stringify(state)
+      const json = JSON.stringify(local)
       if (json !== written.current) {
         written.current = json
         localStorage.setItem(KEY, json)
@@ -132,25 +288,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch {
       /* storage unavailable: the wallet lives in memory */
     }
-  }, [state])
-
-  // Another tab changed the wallet: take its version, so two tabs never overwrite each other
+  }, [local])
   useEffect(() => {
     const on = (e: StorageEvent) => {
       if (e.key !== KEY || !e.newValue || e.newValue === written.current) return
       try {
         written.current = e.newValue
-        commit(tick(migrate(JSON.parse(e.newValue), Date.now()), Date.now(), PAGE), false)
+        const next = tick(migrate(JSON.parse(e.newValue), Date.now()), Date.now(), PAGE)
+        setLocal(next)
+        if (!acctRef.current) ref.current = next
       } catch {
         /* ignore a bad write */
       }
     }
     window.addEventListener("storage", on)
     return () => window.removeEventListener("storage", on)
-  }, [commit])
-
-  // Expire credits and renew plans while the app is open
+  }, [])
   useEffect(() => {
+    if (mode !== "local") return
     const run = () => {
       const cur = ref.current, now = Date.now()
       const next = tick(cur, now, PAGE)
@@ -163,24 +318,141 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       clearInterval(t)
       window.removeEventListener("focus", run)
     }
-  }, [commit])
+  }, [mode, commit])
+
+  // The account's wallet: load it, and look again when the app comes back to the front and every minute
+  useEffect(() => {
+    if (mode !== "account") return
+    refresh()
+    const t = setInterval(() => document.visibilityState === "visible" && refresh(), 60000)
+    const vis = () => document.visibilityState === "visible" && refresh()
+    document.addEventListener("visibilitychange", vis)
+    window.addEventListener("focus", vis)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener("visibilitychange", vis)
+      window.removeEventListener("focus", vis)
+    }
+  }, [mode, account, refresh])
+
+  // Back from Stripe's checkout page: ask the server whether the payment went through
+  useEffect(() => {
+    if (mode !== "account" || !ready) return
+    const q = new URLSearchParams(window.location.search)
+    const how = q.get("checkout")
+    if (!how) return
+    const sid = q.get("session_id") || ""
+    const clean = () => {
+      const u = new URL(window.location.href)
+      u.searchParams.delete("checkout")
+      u.searchParams.delete("session_id")
+      window.history.replaceState(null, "", u.pathname + u.search + u.hash)
+    }
+    clean()
+    if (how !== "stripe" || !/^cs_[A-Za-z0-9_]+$/.test(sid)) return
+    const user = account
+    let on = true
+    ;(async () => {
+      for (let i = 0; i < 6 && on; i++) {
+        try {
+          const r = await walletApi<{ status: string } & Partial<AcctView>>("/api/pay/stripe/confirm", { session: sid })
+          if (r.status === "paid") {
+            apply(r, user, true)
+            setSheet({ tab: "plans", done: "Payment received. Thank you!" })
+            return
+          }
+        } catch (e) {
+          if ((e as ApiErr).status === 404) return
+        }
+        await new Promise((res) => setTimeout(res, 2500))
+      }
+      if (on) setSheet({ tab: "plans", reason: "Your card payment is still being confirmed. Your credits arrive as soon as Stripe confirms it; there's no need to pay again." })
+    })()
+    return () => {
+      on = false
+    }
+  }, [mode, ready, account, apply])
 
   const value = useMemo<Wallet>(() => {
     const now = Date.now()
+    const state = shown
     const perks = perksOf(state, now)
     const bal = balanceOf(state, now)
-    const charge: Wallet["charge"] = (cost, label, usage, opts) => {
-      const r = ecoSpend(ref.current, cost, label, Date.now(), usage, opts?.hold ? PAGE : undefined)
-      if (!r.ok) {
-        commit(r.state, false)
-        const have = balanceOf(r.state, Date.now())
-        setSheet({ tab: r.state.plan.id === "free" ? "plans" : "topup", reason: `This needs ${cost} credit${cost === 1 ? "" : "s"} and you have ${have}.` })
+    const user = account
+    const short = (cost: number, have: number) =>
+      setSheet({ tab: ref.current.plan.id === "free" ? "plans" : "topup", reason: `This needs ${cost} credit${cost === 1 ? "" : "s"} and you have ${have}.` })
+    const labelOf = (item: Item, note?: string) => `${ITEMS[item.kind].label(item)}${note ? ` · ${note}` : ""}`
+
+    /** Ask the server; on any refusal, show what it says and take its copy again. */
+    const send = (path: string, body: unknown) => {
+      inflight.current++
+      const p = walletApi<AcctView & Record<string, unknown>>(path, body)
+        .then((v) => {
+          inflight.current--
+          apply(v, user)
+          return v
+        })
+        .catch((e: ApiErr) => {
+          inflight.current--
+          // not accepted: go back to the last copy the server confirmed, then ask for a fresh one
+          const last = readAcct(user)
+          if (last && user === acctRef.current) {
+            ref.current = last.wallet
+            setAcct(last)
+          }
+          if (e.code === "short") short(e.need ?? 0, e.have ?? 0)
+          refresh()
+          throw e
+        })
+      p.catch(() => {})
+      return p
+    }
+
+    const charge: Wallet["charge"] = (item, opts) => {
+      const cur = ref.current
+      const t = Date.now()
+      const cost = itemCost(item, perksOf(cur, t))
+      if (cost == null) {
+        if (item.kind === "askExpert") setSheet({ tab: "plans", select: "command", reason: "Expert answers come with the Command plan." })
         return null
       }
-      commit(r.state)
+      const rule = ITEMS[item.kind]
+      if (user) {
+        if (balanceOf(cur, t) < cost) {
+          short(cost, balanceOf(cur, t))
+          return null
+        }
+        const id = newRef()
+        let next = cur
+        if (cost > 0) {
+          const r = ecoSpend(cur, cost, labelOf(item, opts?.note), t, rule.usage)
+          if (r.ok) next = r.state
+        }
+        if (item.kind === "story") next = { ...next, unlocked: [...next.unlocked, Number(item.id)] }
+        if (item.kind === "deck") next = { ...next, decks: [...next.decks, String(item.id)] }
+        commit(next, cost > 0)
+        trackTicket(id, send("/api/wallet/spend", { item, ref: id, note: opts?.note || "" }))
+        return id
+      }
+      const r = ecoSpend(cur, cost, labelOf(item, opts?.note), t, rule.usage, rule.ai?.hold ? PAGE : undefined)
+      if (!r.ok) {
+        commit(r.state, false)
+        short(cost, balanceOf(r.state, t))
+        return null
+      }
+      let next = r.state
+      if (item.kind === "story") next = { ...next, unlocked: [...next.unlocked, Number(item.id)] }
+      if (item.kind === "deck") next = { ...next, decks: [...next.decks, String(item.id)] }
+      commit(next, cost > 0)
+      kinds.current.set(r.entry, item.kind)
       return r.entry
     }
+
     const isUnlocked = (id: number) => perks.allStories || ref.current.unlocked.includes(id) || isFreeStory(id)
+    const hasDeck = (id: string, cost: number) => cost === 0 || perksOf(ref.current, Date.now()).allDecks || ref.current.decks.includes(id)
+    const earnAmount = (kind: EarnKind, key: string | number) =>
+      kind === "badge" ? EARN.badge : kind === "chest" ? EARN.chest : kind === "level" ? EARN.level[Number(key)] || 0 : EARN.streak[Number(key)] || 0
+
     return {
       state,
       balance: bal,
@@ -193,51 +465,115 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       currency,
       setCurrency,
       flash,
+      mode,
+      ready: mode === "local" || ready,
+      checkout: mode === "account" ? acct?.checkout ?? null : null,
+      price: (item) => itemCost(item, perks),
       charge,
       settle: (receipt) => {
-        if (receipt) commit(ecoSettle(ref.current, receipt), false)
+        if (!receipt) return
+        // the server keeps a charge the moment the answer starts arriving; just show its copy
+        if (user) setTimeout(refresh, 400)
+        else commit(ecoSettle(ref.current, receipt), false)
       },
-      refund: (receipt, usage) => {
-        if (receipt) commit(ecoRefund(ref.current, receipt, Date.now(), usage))
+      refund: (receipt) => {
+        if (!receipt) return
+        if (user) {
+          readyTicket(receipt)
+            .then(() => send("/api/wallet/refund", { ticket: receipt }))
+            .catch(() => refresh())
+          return
+        }
+        const kind = kinds.current.get(receipt)
+        commit(ecoRefund(ref.current, receipt, Date.now(), kind ? ITEMS[kind].usage : undefined))
       },
-      changeKind: (id, cycle) => ecoChangeKind(ref.current, id, cycle),
-      earn: (n, label) => commit(ecoEarn(ref.current, n, label, Date.now())),
-      buyTopUp: (id) => {
-        const t = TOPUPS.find((x) => x.id === id)
-        if (t) commit(ecoTopUp(ref.current, t, currency, Date.now()))
+      earn: (kind, key, label) => {
+        const n = earnAmount(kind, key)
+        if (!n) return
+        commit(ecoEarn(ref.current, n, label, Date.now()))
+        if (user) send("/api/wallet/earn", { kind, key, label }).catch(() => {})
       },
-      buyPass: () => commit(ecoPass(ref.current, currency, Date.now())),
-      subscribe: (id, cycle) => commit(ecoSubscribe(ref.current, id, cycle, currency, Date.now())),
-      cancelPlan: () => commit(ecoCancel(ref.current, Date.now()), false),
+      claimAll: (c) => {
+        if (user) send("/api/wallet/claims", c).catch(() => {})
+      },
+      buy: async (key) => {
+        const p = product(key)
+        if (!p) return { ok: false, error: "Unknown product" }
+        if (!user) {
+          // this browser's practice wallet: nothing is charged
+          const r = grantPurchase(ref.current, key, currency, Date.now(), `${fmtPrice(p.price[currency], currency)} (prototype, no charge)`)
+          if (!r.ok) return { ok: false, error: r.why }
+          commit(r.state)
+          return { ok: true, message: boughtMessage(key) }
+        }
+        try {
+          const o = await walletApi<Record<string, unknown>>("/api/pay/order", { product: key, currency })
+          if (o.provider === "simulated") {
+            apply(o, user, true)
+            return { ok: true, message: boughtMessage(key) }
+          }
+          if (o.provider === "stripe" && typeof o.url === "string" && o.url.startsWith("https://checkout.stripe.com/")) {
+            window.location.assign(o.url)
+            return { redirect: true }
+          }
+          if (o.provider !== "razorpay") return { ok: false, error: "Payments aren't open yet." }
+          const Razorpay = await loadRazorpay()
+          return await new Promise<BuyResult>((resolve) => {
+            const r = new Razorpay({
+              key: o.keyId,
+              order_id: o.orderId,
+              amount: o.amount,
+              currency: o.currency,
+              name: "NilObs",
+              description: o.description,
+              prefill: o.prefill,
+              theme: { color: "#0b6bcb" },
+              handler: (resp: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
+                walletApi<AcctView>("/api/pay/razorpay/verify", { orderId: resp.razorpay_order_id, paymentId: resp.razorpay_payment_id, signature: resp.razorpay_signature })
+                  .then((v) => {
+                    apply(v, user, true)
+                    resolve({ ok: true, message: boughtMessage(key) })
+                  })
+                  .catch(() => {
+                    // paid, but we couldn't confirm it just now: Razorpay's webhook will
+                    setTimeout(refresh, 5000)
+                    resolve({ ok: false, error: "Payment received. Your credits will appear in a minute; there's no need to pay again." })
+                  })
+              },
+              modal: { ondismiss: () => resolve({ ok: false, cancelled: true }), confirm_close: true },
+            })
+            r.open()
+          })
+        } catch (e) {
+          const er = e as ApiErr
+          return { ok: false, error: er.code === "offline" ? er.message : er.message || "The payment couldn't start. Try again." }
+        }
+      },
       unlock: (id) => {
         if (isUnlocked(id)) return true
-        const rec = charge(COSTS.story, "Unlocked an inspection story", "stories")
-        if (!rec) return false
-        const next = { ...ref.current, unlocked: [...ref.current.unlocked, id] }
-        commit(next, false)
-        return true
+        return !!charge({ kind: "story", id })
       },
       isUnlocked,
-      hasDeck: (id, cost) => cost === 0 || perks.allDecks || ref.current.decks.includes(id),
+      hasDeck,
       unlockDeck: (id, cost, name) => {
-        if (cost === 0 || perks.allDecks || ref.current.decks.includes(id)) return true
-        const rec = charge(cost, `Unlocked deck: ${name}`, "decks")
-        if (!rec) return false
-        commit({ ...ref.current, decks: [...ref.current.decks, id] }, false)
-        return true
+        if (hasDeck(id, cost)) return true
+        return !!charge({ kind: "deck", id }, { note: name })
       },
       share: (text) => shareStatus(ref.current, Date.now(), text),
       recordShare: (text) => {
-        if (!shareStatus(ref.current, Date.now(), text).ok) return false
-        commit(recordShare(ref.current, Date.now(), text))
+        const t = text.trim()
+        if (!shareStatus(ref.current, Date.now(), t).ok || (user && t.length < 40)) return false
+        commit(recordShare(ref.current, Date.now(), t))
+        if (user) send("/api/wallet/earn", { kind: "share", text: t }).catch(() => {})
         return true
       },
+      refresh,
       sheet,
       openPlans: (o = {}) => setSheet({ tab: o.tab ?? "plans", reason: o.reason, select: o.select, cycle: o.cycle }),
       openTopUp: (reason, select) => setSheet({ tab: select && select.startsWith("t") ? "topup" : "plans", reason, select }),
       closePlans: () => setSheet(null),
     }
-  }, [state, flash, sheet, currency, setCurrency, commit])
+  }, [shown, acct, ready, mode, account, flash, sheet, currency, setCurrency, commit, apply, refresh])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
@@ -259,6 +595,7 @@ export function CreditPill({ onClick, className }: { onClick?: () => void; class
       className={cn(
         "tnum flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 font-mono text-[12px] font-semibold whitespace-nowrap",
         low ? "border-signal bg-signal-soft text-signal-ink" : "border-line bg-surface text-ink",
+        !w.ready && "opacity-60",
         className
       )}
     >
@@ -285,6 +622,7 @@ export function WalletNudge({ onOpen }: { onOpen: () => void }) {
   const w = useWallet()
   const days = (t: number) => Math.max(0, Math.ceil((t - Date.now()) / 86400000))
   let msg: ReactNode = null
+  if (!w.ready) return null
   if (w.expiring) msg = <><b className="font-semibold">{w.expiring.n} credits expire {days(w.expiring.at) <= 1 ? "tomorrow" : `in ${days(w.expiring.at)} days`}.</b> Use them on a mock interview or a brief.</>
   else if (w.balance < 10 && w.plan.id === "free") msg = <><b className="font-semibold">{w.balance} credits left.</b> Watchkeeper gives you {PLANS.watch.credits} a month for {fmtPrice(PLANS.watch.price[w.currency].monthly, w.currency)}.</>
   else if (w.balance < 10) msg = <><b className="font-semibold">{w.balance} credits left</b> until your plan refills. Top-ups never expire.</>

@@ -11,7 +11,8 @@ async function sha256(s) {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")
 }
 
-export async function handleVoice(request, env, fetchImpl = fetch, cache = globalThis.caches?.default) {
+/** `meter` (signed-in users): each spoken line uses one voice line from a paid ticket; a failed line is given back. */
+export async function handleVoice(request, env, fetchImpl = fetch, cache = globalThis.caches?.default, meter = null) {
   if (request.method !== "POST") return reply(405, { error: "Use POST" })
   const key = env.RUMIK_API_KEY
   if (!key) return reply(503, { error: "Voice isn't set up on this server (missing RUMIK_API_KEY)" })
@@ -28,6 +29,10 @@ export async function handleVoice(request, env, fetchImpl = fetch, cache = globa
   const text = String(body?.text ?? "").replace(/\s+/g, " ").trim()
   if (!text) return reply(400, { error: "No text" })
   if (text.length > MAX_CHARS) return reply(413, { error: `Keep it under ${MAX_CHARS} characters` })
+  if (meter) {
+    const deny = await meter.begin(body, {})
+    if (deny) return deny
+  }
 
   const model = env.NILOBS_VOICE_MODEL || "muga"
   const tone = env.NILOBS_VOICE_TONE || ""
@@ -38,7 +43,10 @@ export async function handleVoice(request, env, fetchImpl = fetch, cache = globa
   const cacheKey = cache ? new Request(`https://voice-cache.nilobs.internal/${await sha256(JSON.stringify(payload))}`) : null
   if (cache && cacheKey) {
     const hit = await cache.match(cacheKey)
-    if (hit) return new Response(hit.body, { headers: { "content-type": hit.headers.get("content-type") || "audio/wav", "cache-control": "no-store", "x-voice-cache": "hit" } })
+    if (hit) {
+      await meter?.delivered()
+      return new Response(hit.body, { headers: { "content-type": hit.headers.get("content-type") || "audio/wav", "cache-control": "no-store", "x-voice-cache": "hit" } })
+    }
   }
 
   let upstream
@@ -49,9 +57,11 @@ export async function handleVoice(request, env, fetchImpl = fetch, cache = globa
       body: JSON.stringify(payload),
     })
   } catch {
+    await meter?.returned()
     return reply(502, { error: "Could not reach the voice service" })
   }
   if (!upstream.ok) {
+    await meter?.returned()
     let detail = ""
     try {
       detail = (await upstream.text()).slice(0, 300)
@@ -63,6 +73,7 @@ export async function handleVoice(request, env, fetchImpl = fetch, cache = globa
     return reply(502, { error: upstream.status === 401 || upstream.status === 403 ? "The voice key was rejected" : "The voice service returned an error" })
   }
   const audio = await upstream.arrayBuffer()
+  await meter?.delivered()
   const type = upstream.headers.get("content-type") || "audio/wav"
   if (cache && cacheKey) {
     try {
