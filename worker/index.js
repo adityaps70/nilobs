@@ -21,11 +21,7 @@ export default {
       url.port = ""
       return Response.redirect(url.toString(), 301)
     }
-    // /privacy → the privacy page
-    if (url.pathname === "/privacy" || url.pathname === "/privacy/") {
-      url.pathname = "/privacy.html"
-      return env.ASSETS.fetch(new Request(url.toString(), request))
-    }
+    // (Cloudflare's static assets already serve public/privacy.html at /privacy)
     if (AUTH_ROUTES.includes(url.pathname)) return handleAuth(request, env)
     if (url.pathname === "/api/ai" || url.pathname === "/api/voice") {
       // With Google sign-in set up, the AI features are for signed-in users only

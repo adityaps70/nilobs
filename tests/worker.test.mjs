@@ -202,5 +202,5 @@ test("workers.dev pages move to nilobs.com; the API and other hosts don't", asyn
   const local = await worker.fetch(new Request("http://localhost:8788/"), env)
   assert.equal(await local.text(), "asset /")
   const priv = await worker.fetch(new Request("https://nilobs.com/privacy"), env)
-  assert.equal(await priv.text(), "asset /privacy.html")
+  assert.equal(await priv.text(), "asset /privacy", "served by Cloudflare's assets as privacy.html")
 })
