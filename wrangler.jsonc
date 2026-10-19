@@ -3,7 +3,8 @@
   "name": "nilobs",
   "main": "worker/index.js",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "./public", "binding": "ASSETS" },
+  // run_worker_first: every request goes through worker/index.js, so www.nilobs.com can redirect to nilobs.com
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "observability": { "enabled": true },
   // nilobs.com (DNS on Cloudflare, registered at Namecheap). www redirects to it in worker/index.js.
   // Keep workers_dev on so the nilobs.<subdomain>.workers.dev address keeps working too.
