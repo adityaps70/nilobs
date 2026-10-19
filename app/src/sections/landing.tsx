@@ -14,7 +14,8 @@ import { WordRotate } from "@/components/magicui/word-rotate"
 import * as I from "@/components/icons"
 import { ScaledScreen } from "@/components/PhoneApp"
 import { StoryCard, StoryReader } from "@/components/StoryViews"
-import { COSTS, EARN, PACKS, WELCOME_CREDITS, inr } from "@/credits"
+import { COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, WELCOME_CREDITS, fmtPrice, useWallet, type Cycle } from "@/credits"
+import { COST_ROWS, CurrencyToggle, CycleToggle, priceLine } from "@/components/Plans"
 import { cn } from "@/lib/utils"
 import { useNav } from "@/nav"
 import { BANK, STATS, TOPIC_EVIDENCE } from "@/data"
@@ -28,8 +29,10 @@ import { LevelRing, MissionsCard, StreakPill } from "@/components/AppPlus"
 import { SectionHead } from "./top"
 
 /* ---------------- Nav ---------------- */
+const SITE_LINKS: [string, string][] = [["#spot", "Play"], ["#ai", "AI"], ["#radar", "Radar"], ["#stories", "Stories"], ["#pricing", "Pricing"], ["#fleet", "For ship managers"]]
 export function SiteNav() {
   const { openApp } = useNav()
+  const [menu, setMenu] = useState(false)
   return (
     <header className="gutter sticky top-[env(safe-area-inset-top,0px)] z-50 border-b border-white/70 bg-white/75 backdrop-blur-xl backdrop-saturate-150">
       <div className="mx-auto flex h-16 max-w-[1180px] items-center justify-between gap-4">
@@ -45,10 +48,22 @@ export function SiteNav() {
           <a className="hover:text-ink" href="#pricing">Pricing</a>
           <a className="hover:text-ink" href="#fleet">For ship managers</a>
         </nav>
-        <button type="button" onClick={() => openApp()} className="flex h-10 items-center gap-1.5 rounded-full bg-primary px-4 text-[13.5px] font-semibold text-on-primary">
-          Start free <span className="hidden sm:inline">· {WELCOME_CREDITS} credits</span>
-        </button>
+        <span className="flex items-center gap-1.5">
+          <button type="button" aria-expanded={menu} aria-label="Menu" onClick={() => setMenu((v) => !v)} className="flex size-10 items-center justify-center rounded-full border border-line bg-surface md:hidden">
+            {menu ? <I.Close size={17} /> : <I.Layout size={17} />}
+          </button>
+          <button type="button" onClick={() => openApp()} className="flex h-10 items-center gap-1.5 rounded-full bg-primary px-4 text-[13.5px] font-semibold text-on-primary">
+            Start free <span className="hidden sm:inline">· {WELCOME_CREDITS} credits</span>
+          </button>
+        </span>
       </div>
+      {menu && (
+        <nav aria-label="Sections" className="mx-auto grid max-w-[1180px] grid-cols-2 gap-1.5 pb-3 md:hidden">
+          {SITE_LINKS.map(([h, l]) => (
+            <a key={h} href={h} onClick={() => setMenu(false)} className="flex h-10 items-center rounded-xl bg-surface px-3 text-[14px] font-semibold no-underline">{l}</a>
+          ))}
+        </nav>
+      )}
     </header>
   )
 }
@@ -138,7 +153,7 @@ function HeroPhone() {
 export function LandingHero() {
   const { openApp } = useNav()
   return (
-    <section id="top" className="gutter relative overflow-hidden">
+    <section id="top" className="gutter relative scroll-mt-20 overflow-hidden">
       <div className="relative mx-auto grid max-w-[1180px] items-center gap-12 pt-10 pb-14 lg:grid-cols-[minmax(0,1fr)_400px] lg:pt-16">
         <div className="flex flex-col gap-6">
           <a href="#spot" className="glass group w-fit rounded-full px-4 py-1.5 text-[13px] no-underline">
@@ -304,77 +319,140 @@ export function StoriesSection({ selected, setSelected }: { selected: number; se
 }
 
 /* ---------------- Pricing ---------------- */
-function CostRow({ icon, label, sub, cost }: { icon: ReactNode; label: string; sub: string; cost: ReactNode }) {
-  return (
-    <div className="flex items-center gap-3.5 border-b border-line py-3.5 last:border-0">
-      <span className="gloss tile-blue flex size-10 shrink-0 items-center justify-center rounded-xl">{icon}</span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[15px] font-semibold">{label}</span>
-        <span className="text-[13px] text-mute">{sub}</span>
-      </span>
-      <span className="shrink-0">{cost}</span>
-    </div>
-  )
-}
+const FAQ: [string, string][] = [
+  ["What can I do for free?", `Everything that teaches: ${CARDS.length} flashcards with spaced repetition, Spot the observation, the observation radar, the ready kit, daily missions and the question bank. You also get ${WELCOME_CREDITS} credits in your first month and ${PLANS.free.credits} every month after, so you can try every AI feature properly before you pay.`],
+  ["How do credits work?", "AI features and premium content cost credits; the price is shown on every button before you tap it. A quick AI answer is 1 credit, a mock interview 8, a brief with its AI plan 20. If an AI answer fails, the credits come straight back."],
+  ["Do credits expire?", `Plan credits refill every 30 days and don't roll over, so use them. Welcome credits last ${WELCOME.days} days, credits you earn in the app last 60 days, and top-ups never expire. NilObs always spends the credits that expire soonest first.`],
+  ["What happens when I run out?", "Learning carries on as normal: flashcards, the game, the radar and the ready kit are always free. AI features pause until your plan refills, you earn more, or you top up. Nothing is charged automatically."],
+  ["I'm at sea for months. Do I need a subscription?", `No. The ${PASS.name} is a one-off: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days / 30} months, and nothing renews. Download what you need while you have signal.`],
+  ["Can I cancel?", "Yes, any time. Your plan runs to the end of the month you paid for, then you move to Free. Your XP, level, streak and saved work stay."],
+]
 
 export function Pricing() {
   const { openApp } = useNav()
-  const credit = (n: number) => (
-    <span className="tnum inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 font-mono text-[12.5px] font-semibold"><I.Coin size={13} />{n}</span>
-  )
+  const w = useWallet()
+  const cur = w.currency
+  const [cycle, setCycle] = useState<Cycle>("monthly")
+  const cards = [
+    { id: "free" as const, name: PLANS.free.name, tag: PLANS.free.tagline, perks: PLANS.free.perks, cta: "Start free", go: () => openApp() },
+    { id: "watch" as const, name: PLANS.watch.name, tag: PLANS.watch.tagline, perks: PLANS.watch.perks, cta: `Choose ${PLANS.watch.name}`, go: () => openApp({ screen: "wallet", packId: `watch@${cycle}` }), popular: true },
+    { id: "command" as const, name: PLANS.command.name, tag: PLANS.command.tagline, perks: PLANS.command.perks, cta: `Choose ${PLANS.command.name}`, go: () => openApp({ screen: "wallet", packId: `command@${cycle}` }) },
+  ]
   return (
     <section id="pricing" className="gutter scroll-mt-20 py-20">
-      <div className="mx-auto flex max-w-[1180px] flex-col gap-10">
-        <SectionHead eyebrow="Pricing" title={`Start with ${WELCOME_CREDITS} free credits. Pay only for what you use.`}>
-          No subscription. Try the app properly first; top up only once it has helped you.
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-8">
+        <SectionHead eyebrow="Pricing" title="Start free. Pay once it's helping you.">
+          Every new account gets {WELCOME_CREDITS} credits in the first month to try the AI inspector, Photo check, a brief and Ask NilObs properly. Learning is free for ever. Plans refill every month; top-ups never expire.
         </SectionHead>
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
-          <div className="flex flex-col gap-5 rounded-3xl border border-line bg-surface p-6">
-            <div className="flex flex-col">
-              <span className="font-mono text-[11.5px] tracking-[0.1em] text-mute uppercase">What credits buy</span>
-              <CostRow icon={<I.Clipboard size={19} />} label="Inspection brief" sub="For your oil major, port and rank" cost={credit(COSTS.brief)} />
-              <CostRow icon={<I.Mic size={19} />} label="AI inspector" sub="Five questions graded on fact, procedure and record, with follow-ups" cost={credit(COSTS.interview)} />
-              <CostRow icon={<I.Newspaper size={19} />} label="Full inspection story" sub="Yours to keep once unlocked" cost={credit(COSTS.story)} />
-              <CostRow icon={<I.Layers size={19} />} label="Specialist deck" sub="ECDIS, CDI prep or China coast. Unlock once, keep it" cost={credit(30)} />
-              <CostRow icon={<I.Sparkle size={19} />} label="AI question or close-out draft" sub="3 free every day, then per question" cost={credit(2)} />
-            </div>
-            <div className="flex flex-col gap-2 rounded-2xl bg-sea-soft p-4 text-sea">
-              <span className="flex items-center gap-2 text-[14.5px] font-bold"><I.Check size={17} /> Always free</span>
-              <span className="text-[13.5px] leading-relaxed">Rank-wise and rating flashcards, Spot the observation, the observation radar, the ready kit, daily missions, the question bank, field lessons and story previews.</span>
-            </div>
-            <div className="flex items-center gap-3 rounded-2xl border border-dashed border-line p-4">
-              <span className="gloss tile-rose flex size-10 shrink-0 items-center justify-center rounded-xl"><I.Plus size={19} /></span>
-              <span className="flex flex-col">
-                <span className="text-[15px] font-semibold">Share a debrief, earn {EARN.share} credits. Finish your daily missions, earn 5 more</span>
-                <span className="text-[13px] text-mute">Anonymous. Names are removed before anyone sees it.</span>
-              </span>
-            </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            {PACKS.map((p) => (
-              <div key={p.id} className={cn("relative flex flex-col gap-4 overflow-hidden rounded-3xl border p-5", p.popular ? "border-transparent bg-hero text-hero-ink" : "border-line bg-surface")}>
-                <span className="flex items-center justify-between">
-                  <span className="text-[16px] font-bold">{p.name}</span>
-                  {p.popular && <span className="rounded-full bg-hero-accent px-2 py-0.5 font-mono text-[10px] font-semibold text-[#1a0a00]">POPULAR</span>}
+        <div className="flex flex-wrap items-center gap-2">
+          <CurrencyToggle value={cur} onChange={w.setCurrency} />
+          <CycleToggle value={cycle} onChange={setCycle} />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {cards.map((c) => {
+            const pl = priceLine(c.id, cur, cycle)
+            const pop = c.popular
+            return (
+              <div key={c.id} className={cn("relative flex flex-col gap-4 overflow-hidden rounded-3xl border p-5", pop ? "border-transparent bg-hero text-hero-ink" : "border-line bg-surface")}>
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[17px] font-bold">{c.name}</span>
+                  {pop && <span className="rounded-full bg-hero-accent px-2 py-0.5 font-mono text-[10px] font-semibold text-[#1a0a00]">MOST POPULAR</span>}
                 </span>
+                <span className={cn("text-[13px] leading-snug", pop ? "text-hero-muted" : "text-mute")}>{c.tag}</span>
                 <span className="flex flex-col">
-                  <span className="tnum display text-[34px] leading-none font-bold">{inr(p.price)}</span>
-                  <span className={cn("tnum mt-1 font-mono text-[12.5px]", p.popular ? "text-hero-muted" : "text-mute")}>{p.credits.toLocaleString("en-IN")} credits</span>
+                  <span className="flex items-end gap-1.5">
+                    <span className="tnum display text-[36px] leading-none font-bold">{pl.big}</span>
+                    <span className={cn("pb-1 text-[13px]", pop ? "text-hero-muted" : "text-mute")}>{c.id === "free" ? "for ever" : "/ month"}</span>
+                  </span>
+                  <span className={cn("mt-1 text-[12px]", pop ? "text-hero-muted" : "text-mute")}>
+                    {c.id === "free" ? `${WELCOME_CREDITS} credits to start` : cycle === "annual" ? `Billed ${fmtPrice(PLANS[c.id].price[cur].annual, cur)} a year` : `${PLANS[c.id].credits.toLocaleString("en-IN")} credits every month`}
+                  </span>
                 </span>
-                <span className={cn("text-[13.5px] leading-snug", p.popular ? "text-hero-muted" : "text-mute")}>{p.note}</span>
-                <button
-                  type="button"
-                  onClick={() => openApp({ screen: "wallet", packId: p.id })}
-                  className={cn("mt-auto h-11 rounded-xl text-[14px] font-semibold", p.popular ? "bg-hero-accent text-[#1a0a00]" : "border border-line hover:border-mute")}
-                >
-                  Buy {p.name}
+                <ul className={cn("flex flex-col gap-2 border-t pt-4", pop ? "border-hero-track" : "border-line")}>
+                  {c.perks.map((x) => (
+                    <li key={x} className="flex gap-2 text-[13.5px] leading-snug"><I.Check size={16} className={cn("mt-0.5 shrink-0", pop ? "text-hero-accent" : "text-sea")} />{x}</li>
+                  ))}
+                </ul>
+                <button type="button" onClick={c.go} className={cn("mt-auto h-11 rounded-xl text-[14px] font-semibold", pop ? "bg-hero-accent text-[#1a0a00]" : c.id === "free" ? "bg-primary text-on-primary" : "border border-line hover:border-mute")}>
+                  {c.cta}
                 </button>
-                {p.popular && <BorderBeam size={140} duration={8} colorFrom="#0b6bcb" colorTo="#f26b1d" borderWidth={1.5} />}
+                {pop && <BorderBeam size={140} duration={8} colorFrom="#0b6bcb" colorTo="#f26b1d" borderWidth={1.5} />}
               </div>
-            ))}
-            <p className="text-[12.5px] leading-relaxed text-mute sm:col-span-3">Prices are for testing and include GST. Credits don't expire. Ship managers can buy credits for whole crews.</p>
+            )
+          })}
+          <div className="relative flex flex-col gap-4 overflow-hidden rounded-3xl border border-dashed border-line bg-surface p-5">
+            <span className="flex items-center gap-2 text-[17px] font-bold"><I.Anchor size={17} /> {PASS.name}</span>
+            <span className="text-[13px] leading-snug text-mute">For a contract at sea. No subscription.</span>
+            <span className="flex flex-col">
+              <span className="flex items-end gap-1.5">
+                <span className="tnum display text-[36px] leading-none font-bold">{fmtPrice(PASS.price[cur], cur)}</span>
+                <span className="pb-1 text-[13px] text-mute">once</span>
+              </span>
+              <span className="mt-1 text-[12px] text-mute">{PASS.credits.toLocaleString("en-IN")} credits for {PASS.days / 30} months</span>
+            </span>
+            <ul className="flex flex-col gap-2 border-t border-line pt-4">
+              {PASS.perks.map((x) => <li key={x} className="flex gap-2 text-[13.5px] leading-snug"><I.Check size={16} className="mt-0.5 shrink-0 text-sea" />{x}</li>)}
+            </ul>
+            <button type="button" onClick={() => openApp({ screen: "wallet", packId: "pass" })} className="mt-auto h-11 rounded-xl border border-line text-[14px] font-semibold hover:border-mute">Get the pass</button>
           </div>
         </div>
+
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-3 rounded-3xl border border-line bg-surface p-5">
+            <span className="font-mono text-[11.5px] tracking-[0.1em] text-mute uppercase">What credits buy</span>
+            <div className="flex flex-col">
+              {COST_ROWS.map((r) => (
+                <div key={r.label} className="flex items-center gap-3 border-b border-line py-2.5 last:border-0">
+                  <IconTile icon={r.icon} color={r.color} size={34} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="text-[14px] font-semibold">{r.label}</span>
+                    <span className="text-[12.5px] leading-snug text-mute">{r.sub}</span>
+                  </span>
+                  <span className="tnum inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 font-mono text-[12.5px] font-semibold"><I.Coin size={13} />{r.cost}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[12.5px] leading-snug text-mute">A failed AI answer is refunded automatically. Prices are shown on every button before you tap it.</p>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2 rounded-3xl bg-sea-soft p-5 text-sea">
+              <span className="flex items-center gap-2 text-[15px] font-bold"><I.Check size={17} /> Always free</span>
+              <span className="text-[13.5px] leading-relaxed">Rank-wise and rating flashcards, Spot the observation, the observation radar, the ready kit, daily missions, the question bank, the official checklist and three full inspection stories, plus one more each week.</span>
+            </div>
+            <div className="flex flex-col gap-3 rounded-3xl border border-line bg-surface p-5">
+              <span className="font-mono text-[11.5px] tracking-[0.1em] text-mute uppercase">Earn credits by learning</span>
+              <div className="grid grid-cols-2 gap-2 text-[13px]">
+                {[[`+${EARN.chest}`, "daily missions chest"], [`+${EARN.badge}`, "each badge"], [`+${EARN.level[2]}–${EARN.level[10]}`, "each level-up"], [`+${EARN.streak[7]} / +${EARN.streak[30]}`, "7 and 30-day streaks"], [`+${EARN.share}`, `each debrief you share (${EARN.sharePerMonth} a month)`]].map(([v, l]) => (
+                  <span key={l} className="flex flex-col rounded-2xl bg-surface-2 px-3 py-2"><b className="tnum font-bold">{v}</b><span className="text-[12px] leading-snug text-mute">{l}</span></span>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 rounded-3xl border border-line bg-surface p-5">
+              <span className="font-mono text-[11.5px] tracking-[0.1em] text-mute uppercase">Top-ups · never expire</span>
+              <div className="grid grid-cols-3 gap-2">
+                {TOPUPS.map((t) => (
+                  <button key={t.id} type="button" onClick={() => openApp({ screen: "wallet", packId: t.id })} className="flex flex-col items-start gap-0.5 rounded-2xl border border-line px-3 py-2.5 text-left hover:border-mute">
+                    <span className="tnum text-[15px] font-bold">{fmtPrice(t.price[cur], cur)}</span>
+                    <span className="tnum text-[12px] text-mute">{t.credits.toLocaleString("en-IN")} credits</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-2 md:grid-cols-2">
+          {FAQ.map(([q, a]) => (
+            <details key={q} className="group rounded-2xl border border-line bg-surface px-4 py-3">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[14.5px] font-semibold">
+                {q}
+                <I.ChevronDown size={17} className="shrink-0 text-mute transition-transform group-open:rotate-180" />
+              </summary>
+              <p className="pt-2 text-[13.5px] leading-relaxed text-mute">{a}</p>
+            </details>
+          ))}
+        </div>
+        <p className="text-[12.5px] leading-relaxed text-mute">Prototype: checkout is simulated and no payment is taken. {cur === "INR" ? "Rupee prices include GST." : "Dollar prices exclude local taxes."} Ship managers can buy plans for whole crews: get in touch.</p>
       </div>
     </section>
   )
@@ -426,7 +504,7 @@ export function ConfidenceCheck() {
   }, [rank])
   const score = picks.filter((q) => can[q.id]).length
   const msg =
-    score <= 1 ? "Good start. The app shows you exactly what to prepare for each one." : score <= 3 ? "Solid. Close the gaps with the free daily drill." : "You're ready for these. Now try the full checklist for your rank."
+    score === 0 ? "Tick the ones you could answer today. The app shows what to prepare for the rest." : score <= 1 ? "A start. The app shows you exactly what to prepare for each one." : score <= 3 ? "Solid. Close the gaps with the free daily flashcards." : "You're ready for these. Now try the full checklist for your rank."
   return (
     <section id="check" className="gutter scroll-mt-20 py-16">
       <div className="mx-auto flex max-w-[1180px] flex-col gap-8">
@@ -498,7 +576,7 @@ export function ConfidenceCheck() {
               <span className="h-2 rounded-full bg-[rgba(11,107,203,0.14)]"><motion.span animate={{ width: `${(score / Math.max(1, picks.length)) * 100}%` }} className="block h-2 rounded-full bg-primary" /></span>
               <span className="text-[13px] leading-snug text-mute">{msg}</span>
             </div>
-            <button type="button" onClick={() => openApp({ screen: "bank", official: true })} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-semibold text-on-primary">
+            <button type="button" onClick={() => openApp({ screen: "bank", official: true, rank })} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-semibold text-on-primary">
               Open my full checklist, free <I.ArrowRight size={16} />
             </button>
           </div>

@@ -1,133 +1,245 @@
+// Wallet: the React side of the credit economy in economy.ts. Kept per browser in localStorage
+// for this prototype; the same rules can run on a server once there are real accounts.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { AnimatePresence, motion } from "motion/react"
-import confetti from "canvas-confetti"
+import { motion } from "motion/react"
 
-import { BorderBeam } from "@/components/magicui/border-beam"
 import * as I from "@/components/icons"
 import { cn } from "@/lib/utils"
+import { STORIES } from "@/stories"
+import {
+  COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, balance as balanceOf, breakdown, buyPass as ecoPass, buyTopUp as ecoTopUp, cancelPlan as ecoCancel,
+  changeKind as ecoChangeKind, defaultCurrency, earn as ecoEarn, expiringSoon, fmtPrice, migrate, perks as perksOf, recordShare, refund as ecoRefund,
+  settle as ecoSettle, shareStatus, spend as ecoSpend, subscribe as ecoSubscribe, tick, type Currency, type Cycle, type Entry, type Plan, type PlanId,
+  type Usage, type UsageKey, type WalletState,
+} from "@/economy"
 
-// Prototype pricing: roughly 1 credit = ₹1
-export const WELCOME_CREDITS = 100
-export const COSTS = { brief: 50, interview: 20, story: 10 } as const
-export const EARN = { share: 100 } as const
-export const FREE_FEATURES = ["Daily 5-minute drill", "Question bank and self-rating", "Field lessons", "Story previews"]
+export { COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, fmtPrice }
+export type { Currency, Cycle, PlanId }
+/** Free credits a new user starts with (welcome + first month on Free). */
+export const WELCOME_CREDITS = WELCOME.credits + PLANS.free.credits
 
-export interface Pack {
-  id: string
-  name: string
-  credits: number
-  price: number
-  note: string
-  popular?: boolean
+/** Stories anyone can read in full: the three featured ones, plus a different one each week. */
+const FEATURED = STORIES.filter((s) => s.featured).map((s) => s.d.id)
+export function storyOfTheWeek(now = Date.now()) {
+  const pool = STORIES.filter((s) => !s.featured)
+  const week = Math.floor(now / (7 * 86400000))
+  return pool[week % pool.length].d.id
 }
-export const PACKS: Pack[] = [
-  { id: "starter", name: "Starter", credits: 300, price: 299, note: "About 6 briefs" },
-  { id: "voyage", name: "Voyage", credits: 1000, price: 899, note: "Save 10%. Covers a full contract", popular: true },
-  { id: "career", name: "Career", credits: 3000, price: 2399, note: "Save 20%. For the whole rank" },
-]
-export const inr = (n: number) => "₹" + n.toLocaleString("en-IN")
+export const isFreeStory = (id: number) => FEATURED.includes(id) || id === storyOfTheWeek()
 
-export interface Entry {
-  id: string
-  at: string
-  delta: number
-  label: string
+export type SheetTab = "plans" | "topup"
+interface Sheet {
+  reason?: string
+  tab: SheetTab
+  select?: string
+  cycle?: Cycle
 }
-interface WalletState {
+/** One id per page load, so charges held by a page that has closed can be refunded. */
+const PAGE = Math.random().toString(36).slice(2, 10)
+
+export interface Wallet {
+  state: WalletState
   balance: number
+  plan: Plan
+  perks: ReturnType<typeof perksOf>
+  expiring: ReturnType<typeof expiringSoon>
+  parts: ReturnType<typeof breakdown>
   ledger: Entry[]
-  unlocked: number[]
-}
-interface Wallet extends WalletState {
-  spend: (cost: number, label: string) => boolean
+  usage: Usage
+  currency: Currency
+  setCurrency: (c: Currency) => void
+  flash: number
+  /**
+   * Take credits for something. Returns a receipt id, or null (and opens the plans sheet) if short.
+   * With `hold`, the charge is refunded automatically unless `settle` is called (for AI calls).
+   */
+  charge: (cost: number, label: string, usage?: UsageKey, opts?: { hold?: boolean }) => string | null
+  /** The AI call behind a held charge finished: keep the charge. */
+  settle: (receipt: string | null) => void
+  /** Give back a charge whose AI call failed. */
+  refund: (receipt: string | null, usage?: UsageKey) => void
+  changeKind: (id: PlanId, cycle: Cycle) => ReturnType<typeof ecoChangeKind>
+  /** Credits earned by learning. */
   earn: (n: number, label: string) => void
-  buy: (pack: Pack) => void
+  buyTopUp: (id: string) => void
+  buyPass: () => void
+  subscribe: (id: PlanId, cycle: Cycle) => void
+  cancelPlan: () => void
   unlock: (storyId: number) => boolean
   isUnlocked: (storyId: number) => boolean
-  openTopUp: (reason?: string, packId?: string) => void
-  reset: () => void
-  flash: number
+  hasDeck: (id: string, cost: number) => boolean
+  unlockDeck: (id: string, cost: number, name: string) => boolean
+  share: (text?: string) => ReturnType<typeof shareStatus>
+  recordShare: (text: string) => boolean
+  sheet: Sheet | null
+  openPlans: (o?: Partial<Sheet>) => void
+  /** Older name, kept for callers that only want to open the sheet. */
+  openTopUp: (reason?: string, select?: string) => void
+  closePlans: () => void
 }
 
 const KEY = "sr.wallet"
-const fresh = (): WalletState => ({
-  balance: WELCOME_CREDITS,
-  ledger: [{ id: "welcome", at: new Date().toISOString(), delta: WELCOME_CREDITS, label: "Welcome credits" }],
-  unlocked: [],
-})
-function load(): WalletState {
+const CUR_KEY = "sr.currency"
+function load(now: number): WalletState {
   try {
     const raw = localStorage.getItem(KEY)
-    if (raw) return JSON.parse(raw) as WalletState
+    return tick(migrate(raw ? JSON.parse(raw) : null, now), now, PAGE)
   } catch {
-    /* storage blocked: start fresh in memory */
+    return migrate(null, now)
   }
-  return fresh()
 }
 
 const Ctx = createContext<Wallet | null>(null)
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<WalletState>(load)
-  const [topUp, setTopUp] = useState<{ reason?: string; packId?: string } | null>(null)
+  const [state, setState] = useState<WalletState>(() => load(Date.now()))
+  const ref = useRef(state)
   const [flash, setFlash] = useState(0)
-  useEffect(() => {
+  const [sheet, setSheet] = useState<Sheet | null>(null)
+  const [currency, setCur] = useState<Currency>(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(state))
+      const c = localStorage.getItem(CUR_KEY)
+      if (c === "INR" || c === "USD") return c
     } catch {
       /* ignore */
     }
-  }, [state])
-
-  const add = useCallback((delta: number, label: string) => {
-    setState((s) => ({
-      ...s,
-      balance: s.balance + delta,
-      ledger: [{ id: Math.random().toString(36).slice(2), at: new Date().toISOString(), delta, label }, ...s.ledger].slice(0, 60),
-    }))
-    setFlash((f) => f + 1)
+    return defaultCurrency()
+  })
+  const setCurrency = useCallback((c: Currency) => {
+    setCur(c)
+    try {
+      localStorage.setItem(CUR_KEY, c)
+    } catch {
+      /* ignore */
+    }
   }, [])
 
-  const stateRef = useRef(state)
-  stateRef.current = state
+  /** Every change goes through here, so rapid double taps always see the latest balance. */
+  const commit = useCallback((next: WalletState, bump = true) => {
+    ref.current = next
+    setState(next)
+    if (bump) setFlash((f) => f + 1)
+  }, [])
 
-  const value = useMemo<Wallet>(
-    () => ({
-      ...state,
+  const written = useRef("")
+  useEffect(() => {
+    try {
+      const json = JSON.stringify(state)
+      if (json !== written.current) {
+        written.current = json
+        localStorage.setItem(KEY, json)
+      }
+    } catch {
+      /* storage unavailable: the wallet lives in memory */
+    }
+  }, [state])
+
+  // Another tab changed the wallet: take its version, so two tabs never overwrite each other
+  useEffect(() => {
+    const on = (e: StorageEvent) => {
+      if (e.key !== KEY || !e.newValue || e.newValue === written.current) return
+      try {
+        written.current = e.newValue
+        commit(tick(migrate(JSON.parse(e.newValue), Date.now()), Date.now(), PAGE), false)
+      } catch {
+        /* ignore a bad write */
+      }
+    }
+    window.addEventListener("storage", on)
+    return () => window.removeEventListener("storage", on)
+  }, [commit])
+
+  // Expire credits and renew plans while the app is open
+  useEffect(() => {
+    const run = () => {
+      const cur = ref.current, now = Date.now()
+      const next = tick(cur, now, PAGE)
+      if (next.ledger.length !== cur.ledger.length || next.plan.renews !== cur.plan.renews || (next.pass?.until ?? 0) !== (cur.pass?.until ?? 0) || next.holds.length !== cur.holds.length) commit(next, false)
+    }
+    run()
+    const t = setInterval(run, 30000)
+    window.addEventListener("focus", run)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener("focus", run)
+    }
+  }, [commit])
+
+  const value = useMemo<Wallet>(() => {
+    const now = Date.now()
+    const perks = perksOf(state, now)
+    const bal = balanceOf(state, now)
+    const charge: Wallet["charge"] = (cost, label, usage, opts) => {
+      const r = ecoSpend(ref.current, cost, label, Date.now(), usage, opts?.hold ? PAGE : undefined)
+      if (!r.ok) {
+        commit(r.state, false)
+        const have = balanceOf(r.state, Date.now())
+        setSheet({ tab: r.state.plan.id === "free" ? "plans" : "topup", reason: `This needs ${cost} credit${cost === 1 ? "" : "s"} and you have ${have}.` })
+        return null
+      }
+      commit(r.state)
+      return r.entry
+    }
+    const isUnlocked = (id: number) => perks.allStories || ref.current.unlocked.includes(id) || isFreeStory(id)
+    return {
+      state,
+      balance: bal,
+      plan: PLANS[state.plan.id],
+      perks,
+      expiring: expiringSoon(state, now),
+      parts: breakdown(state, now),
+      ledger: state.ledger,
+      usage: state.usage,
+      currency,
+      setCurrency,
       flash,
-      spend: (cost, label) => {
-        if (stateRef.current.balance < cost) {
-          setTopUp({ reason: `${label} needs ${cost} credits. You have ${stateRef.current.balance}.` })
-          return false
-        }
-        add(-cost, label)
+      charge,
+      settle: (receipt) => {
+        if (receipt) commit(ecoSettle(ref.current, receipt), false)
+      },
+      refund: (receipt, usage) => {
+        if (receipt) commit(ecoRefund(ref.current, receipt, Date.now(), usage))
+      },
+      changeKind: (id, cycle) => ecoChangeKind(ref.current, id, cycle),
+      earn: (n, label) => commit(ecoEarn(ref.current, n, label, Date.now())),
+      buyTopUp: (id) => {
+        const t = TOPUPS.find((x) => x.id === id)
+        if (t) commit(ecoTopUp(ref.current, t, currency, Date.now()))
+      },
+      buyPass: () => commit(ecoPass(ref.current, currency, Date.now())),
+      subscribe: (id, cycle) => commit(ecoSubscribe(ref.current, id, cycle, currency, Date.now())),
+      cancelPlan: () => commit(ecoCancel(ref.current, Date.now()), false),
+      unlock: (id) => {
+        if (isUnlocked(id)) return true
+        const rec = charge(COSTS.story, "Unlocked an inspection story", "stories")
+        if (!rec) return false
+        const next = { ...ref.current, unlocked: [...ref.current.unlocked, id] }
+        commit(next, false)
         return true
       },
-      earn: (n, label) => add(n, label),
-      buy: (pack) => add(pack.credits, `Bought ${pack.name} pack (${inr(pack.price)})`),
-      unlock: (storyId) => {
-        if (stateRef.current.unlocked.includes(storyId)) return true
-        if (stateRef.current.balance < COSTS.story) {
-          setTopUp({ reason: `A full story needs ${COSTS.story} credits. You have ${stateRef.current.balance}.` })
-          return false
-        }
-        setState((s) => ({ ...s, unlocked: [...s.unlocked, storyId] }))
-        add(-COSTS.story, "Unlocked an inspection story")
+      isUnlocked,
+      hasDeck: (id, cost) => cost === 0 || perks.allDecks || ref.current.decks.includes(id),
+      unlockDeck: (id, cost, name) => {
+        if (cost === 0 || perks.allDecks || ref.current.decks.includes(id)) return true
+        const rec = charge(cost, `Unlocked deck: ${name}`, "decks")
+        if (!rec) return false
+        commit({ ...ref.current, decks: [...ref.current.decks, id] }, false)
         return true
       },
-      isUnlocked: (storyId) => state.unlocked.includes(storyId),
-      openTopUp: (reason, packId) => setTopUp({ reason, packId }),
-      reset: () => setState(fresh()),
-    }),
-    [state, flash, add]
-  )
+      share: (text) => shareStatus(ref.current, Date.now(), text),
+      recordShare: (text) => {
+        if (!shareStatus(ref.current, Date.now(), text).ok) return false
+        commit(recordShare(ref.current, Date.now(), text))
+        return true
+      },
+      sheet,
+      openPlans: (o = {}) => setSheet({ tab: o.tab ?? "plans", reason: o.reason, select: o.select, cycle: o.cycle }),
+      openTopUp: (reason, select) => setSheet({ tab: select && select.startsWith("t") ? "topup" : "plans", reason, select }),
+      closePlans: () => setSheet(null),
+    }
+  }, [state, flash, sheet, currency, setCurrency, commit])
 
-  return (
-    <Ctx.Provider value={value}>
-      {children}
-      <TopUpSheet open={!!topUp} reason={topUp?.reason} preselect={topUp?.packId} onClose={() => setTopUp(null)} />
-    </Ctx.Provider>
-  )
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
 export function useWallet() {
@@ -138,12 +250,12 @@ export function useWallet() {
 
 export function CreditPill({ onClick, className }: { onClick?: () => void; className?: string }) {
   const w = useWallet()
-  const low = w.balance < COSTS.interview
+  const low = w.balance < 10
   return (
     <button
       type="button"
-      onClick={onClick ?? (() => w.openTopUp())}
-      aria-label={`${w.balance} credits. Get more credits`}
+      onClick={onClick ?? (() => w.openPlans())}
+      aria-label={`${w.balance} credits. Plans and credits`}
       className={cn(
         "tnum flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 font-mono text-[12px] font-semibold whitespace-nowrap",
         low ? "border-signal bg-signal-soft text-signal-ink" : "border-line bg-surface text-ink",
@@ -158,7 +270,8 @@ export function CreditPill({ onClick, className }: { onClick?: () => void; class
   )
 }
 
-export function CostTag({ cost, className }: { cost: number; className?: string }) {
+export function CostTag({ cost, className, free }: { cost: number; className?: string; free?: boolean }) {
+  if (free) return <span className={cn("rounded-full bg-sea-soft px-2 py-0.5 text-[11px] font-semibold text-sea", className)}>Included</span>
   return (
     <span className={cn("tnum inline-flex items-center gap-1 font-mono text-[11.5px] font-semibold", className)}>
       <I.Coin size={13} />
@@ -167,124 +280,20 @@ export function CostTag({ cost, className }: { cost: number; className?: string 
   )
 }
 
-function TopUpSheet({ open, reason, preselect, onClose }: { open: boolean; reason?: string; preselect?: string; onClose: () => void }) {
-  const w = useContext(Ctx)!
-  const [sel, setSel] = useState("voyage")
-  const [stage, setStage] = useState<"pick" | "pay" | "done">("pick")
-  const btn = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    if (open) {
-      setStage("pick")
-      setSel(preselect || "voyage")
-    }
-  }, [open, preselect])
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [open, onClose])
-  const pack = PACKS.find((p) => p.id === sel)!
-  const pay = () => {
-    setStage("pay")
-    setTimeout(() => {
-      w.buy(pack)
-      setStage("done")
-      const r = btn.current?.getBoundingClientRect()
-      confetti({
-        particleCount: 110, spread: 80, startVelocity: 34, disableForReducedMotion: true,
-        colors: ["#0b6bcb", "#f26b1d", "#0b7d64", "#ffcf70", "#7cc4ff"],
-        origin: r ? { x: (r.left + r.width / 2) / window.innerWidth, y: (r.top + r.height / 2) / window.innerHeight } : undefined,
-      })
-    }, 1100)
-  }
+/** Shown on Today when credits run low or are about to expire. */
+export function WalletNudge({ onOpen }: { onOpen: () => void }) {
+  const w = useWallet()
+  const days = (t: number) => Math.max(0, Math.ceil((t - Date.now()) / 86400000))
+  let msg: ReactNode = null
+  if (w.expiring) msg = <><b className="font-semibold">{w.expiring.n} credits expire {days(w.expiring.at) <= 1 ? "tomorrow" : `in ${days(w.expiring.at)} days`}.</b> Use them on a mock interview or a brief.</>
+  else if (w.balance < 10 && w.plan.id === "free") msg = <><b className="font-semibold">{w.balance} credits left.</b> Watchkeeper gives you {PLANS.watch.credits} a month for {fmtPrice(PLANS.watch.price[w.currency].monthly, w.currency)}.</>
+  else if (w.balance < 10) msg = <><b className="font-semibold">{w.balance} credits left</b> until your plan refills. Top-ups never expire.</>
+  if (!msg) return null
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-[rgba(6,16,27,0.55)] backdrop-blur-[2px]" />
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="topup-title"
-            initial={{ y: 40, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 40, opacity: 0 }}
-            transition={{ type: "spring", stiffness: 380, damping: 34 }}
-            className="relative m-0 w-full max-w-[460px] rounded-t-[28px] border border-line bg-surface p-5 pb-[max(20px,env(safe-area-inset-bottom))] font-sans text-ink shadow-2xl sm:m-4 sm:rounded-[28px]"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex flex-col gap-1">
-                <h2 id="topup-title" className="display text-[22px] font-bold">
-                  {stage === "done" ? "Credits added" : "Get more credits"}
-                </h2>
-                <p className="text-[13.5px] leading-snug text-mute">
-                  {stage === "done" ? `${pack.credits} credits are in your wallet. New balance: ${w.balance}.` : reason || `You have ${w.balance} credits.`}
-                </p>
-              </div>
-              <button type="button" aria-label="Close" onClick={onClose} className="flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-surface-2">
-                <I.Close size={18} />
-              </button>
-            </div>
-
-            {stage !== "done" && (
-              <div role="radiogroup" aria-label="Credit packs" className="mt-4 flex flex-col gap-2">
-                {PACKS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={sel === p.id}
-                    onClick={() => setSel(p.id)}
-                    className={cn("relative flex items-center gap-3 overflow-hidden rounded-2xl border p-3.5 text-left transition-colors", sel === p.id ? "border-primary bg-surface-2" : "border-line hover:border-mute")}
-                  >
-                    <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border-2", sel === p.id ? "border-signal" : "border-line")}>
-                      {sel === p.id && <span className="size-2.5 rounded-full bg-signal" />}
-                    </span>
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="flex items-center gap-2 text-[15px] font-bold">
-                        {p.name}
-                        {p.popular && <span className="rounded-full bg-signal-soft px-2 py-0.5 font-mono text-[10px] font-semibold text-signal-ink">POPULAR</span>}
-                      </span>
-                      <span className="text-[12.5px] text-mute">{p.note}</span>
-                    </span>
-                    <span className="flex flex-col items-end">
-                      <span className="tnum text-[16px] font-bold">{inr(p.price)}</span>
-                      <span className="tnum font-mono text-[11.5px] text-mute">{p.credits.toLocaleString("en-IN")} credits</span>
-                    </span>
-                    {p.popular && sel === p.id && <BorderBeam size={80} duration={6} colorFrom="#0b6bcb" colorTo="#f26b1d" borderWidth={1.5} />}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="mt-4 flex flex-col gap-2">
-              {stage === "done" ? (
-                <button type="button" onClick={onClose} className="h-12 rounded-xl bg-primary text-[15px] font-semibold text-on-primary">
-                  Continue
-                </button>
-              ) : (
-                <button ref={btn} type="button" onClick={pay} disabled={stage === "pay"} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-signal text-[15px] font-semibold text-white disabled:opacity-70">
-                  {stage === "pay" ? (
-                    <>
-                      <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }} className="size-4 rounded-full border-2 border-white/40 border-t-white" />
-                      Processing…
-                    </>
-                  ) : (
-                    <>Pay {inr(pack.price)} with UPI or card</>
-                  )}
-                </button>
-              )}
-              <p className="text-center text-[11.5px] text-mute">Prototype: no payment is taken. The live app uses Cashfree checkout.</p>
-              {stage !== "done" && (
-                <p className="text-center text-[12px] text-mute">
-                  Or share a debrief and earn <b className="font-semibold text-ink">{EARN.share} free credits</b>.
-                </p>
-              )}
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <button type="button" onClick={onOpen} className="flex items-center gap-3 rounded-2xl border border-[#ffd2b0] bg-[#fff6ee]/85 px-3.5 py-3 text-left text-[13px] leading-snug text-[#7a2e05]">
+      <I.Coin size={18} className="shrink-0" />
+      <span className="min-w-0 flex-1">{msg}</span>
+      <I.ArrowRight size={16} className="shrink-0" />
+    </button>
   )
 }

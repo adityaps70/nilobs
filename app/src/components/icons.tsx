@@ -236,3 +236,15 @@ export const Brain = ({ size, ...p }: P) => (
 export const Crown = ({ size, ...p }: P) => (
   <svg {...base(size, p)}><path d="m3 8 4.5 4L12 5l4.5 7L21 8l-2 11H5L3 8Z" /></svg>
 )
+export const Volume = ({ size, ...p }: P) => (
+  <svg {...base(size, p)}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+)
+export const Stop = ({ size, ...p }: P) => (
+  <svg {...base(size, p)}><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+)
+export const Settings = ({ size, ...p }: P) => (
+  <svg {...base(size, p)}><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+)
+export const Receipt = ({ size, ...p }: P) => (
+  <svg {...base(size, p)}><path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2v-19Z" /><path d="M9 8h6M9 12h6M9 16h3" /></svg>
+)

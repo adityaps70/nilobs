@@ -5,14 +5,28 @@
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "./public", "binding": "ASSETS" },
   "observability": { "enabled": true },
+  // nilobs.com (DNS on Cloudflare, registered at Namecheap). www redirects to it in worker/index.js.
+  // Keep workers_dev on so the nilobs.<subdomain>.workers.dev address keeps working too.
+  "routes": [
+    { "pattern": "nilobs.com", "custom_domain": true },
+    { "pattern": "www.nilobs.com", "custom_domain": true }
+  ],
+  "workers_dev": true,
   "vars": {
     "NILOBS_MODEL": "claude-sonnet-5-5",
     "NILOBS_MODEL_QUICK": "claude-haiku-5-5",
-    "NILOBS_RATE_PER_MINUTE": "12"
+    "NILOBS_RATE_PER_MINUTE": "12",
+    "NILOBS_PHOTO_PER_MINUTE": "4",
+    "NILOBS_VOICE_MODEL": "muga",
+    "NILOBS_VOICE_PER_MINUTE": "20"
   }
-  // Secret (never commit it): set ANTHROPIC_API_KEY in the Cloudflare dashboard under
-  // Workers & Pages > nilobs > Settings > Variables and Secrets, or run: npx wrangler secret put ANTHROPIC_API_KEY
+  // Secrets (never commit them): set ANTHROPIC_API_KEY (Claude, for the AI) and RUMIK_API_KEY (Rumik, for the
+  // AI inspector's voice) in the Cloudflare dashboard under Workers & Pages > nilobs > Settings > Variables and Secrets,
+  // or run: npx wrangler secret put ANTHROPIC_API_KEY  /  npx wrangler secret put RUMIK_API_KEY
+  // Optional voice settings: NILOBS_VOICE_SPEAKER (e.g. "speaker_2"), NILOBS_VOICE_TONE (e.g. "neutral", muga only),
+  // NILOBS_VOICE_MODEL ("muga" or "mulberry"), NILOBS_VOICE_DESCRIPTION (mulberry only, e.g. "calm, firm male inspector").
   //
   // Optional, stronger rate limit shared across Cloudflare's network. Uncomment to use:
-  // ,"ratelimits": [{ "name": "AI_LIMIT", "namespace_id": "1001", "simple": { "limit": 12, "period": 60 } }]
+  // ,"ratelimits": [{ "name": "AI_LIMIT", "namespace_id": "1001", "simple": { "limit": 12, "period": 60 } },
+  //                 { "name": "PHOTO_LIMIT", "namespace_id": "1002", "simple": { "limit": 4, "period": 60 } }]
 }

@@ -96,6 +96,8 @@ walk(path.join(here, "src"))
 const css = compiler.build([...candidates])
 
 const FONTS = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">`
+// The public address. Social previews need absolute links; set NILOBS_SITE_URL to build for another domain.
+const SITE = (process.env.NILOBS_SITE_URL || "https://nilobs.com").replace(/\/$/, "")
 const DESC = "SIRE 2.0 inspection prep for tanker crews: real observations, rank-wise flashcards, an AI inspector and daily missions. Aim for nil."
 fs.mkdirSync(path.dirname(out), { recursive: true })
 if (hosted) {
@@ -111,9 +113,14 @@ if (hosted) {
 <meta name="theme-color" content="#0d5bc4">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/brand/nilobs-app-icon-512.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="canonical" href="${SITE}/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="${SITE}/">
 <meta property="og:title" content="NilObs">
 <meta property="og:description" content="${DESC}">
-<meta property="og:image" content="/brand/nilobs-lockup.png">
+<meta property="og:image" content="${SITE}/brand/nilobs-lockup.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 ${FONTS}
 <style>${css}</style>

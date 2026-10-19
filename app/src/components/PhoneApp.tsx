@@ -12,12 +12,14 @@ import { TypingAnimation } from "@/components/magicui/typing-animation"
 import * as I from "@/components/icons"
 import { cn } from "@/lib/utils"
 import { StoryCard, StoryReader } from "@/components/StoryViews"
-import { COSTS, CostTag, CreditPill, EARN, PACKS, WELCOME_CREDITS, inr, useWallet } from "@/credits"
+import { COSTS, CostTag, CreditPill, EARN, PLANS, WELCOME_CREDITS, WalletNudge, storyOfTheWeek, useWallet } from "@/credits"
+import { WalletScreen } from "@/components/Plans"
 import type { AppScreen } from "@/nav"
 import { CHANNEL_STORIES, LESSONS, REPORT_STORIES, STORIES, storyById } from "@/stories"
 import { KitScreen, LevelRing, MeScreen, MissionsCard, ObsOfTheDay, RadarScreen, SessionScreen, SpotScreen, StreakPill, TrainScreen } from "@/components/AppPlus"
 import { useProgress } from "@/progress"
 import { AiChip, AiInspector, AskCard, AskScreen, BriefPlan } from "@/components/AiFeatures"
+import { PhotoCheck } from "@/components/PhotoCheck"
 import { FLEET_STATS, KIT_TOTAL, OBS, type DeckId } from "@/fleet"
 import { CHAPTERS, LIB_RANKS, OCIMF_URL, SECTIONS, chapterOf, libForRank, officialFor, sectionOf } from "@/library"
 import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components/topicIcons"
@@ -38,11 +40,13 @@ export function burst(el?: Element | null, opts: confetti.Options = {}) {
 }
 
 /* ---------- small utilities ---------- */
-function usePersist<T>(key: string, init: T) {
+function usePersist<T>(key: string, init: T, valid?: (x: unknown) => boolean) {
   const [v, setV] = useState<T>(() => {
     try {
       const s = localStorage.getItem(key)
-      return s ? (JSON.parse(s) as T) : init
+      if (!s) return init
+      const x = JSON.parse(s)
+      return valid && !valid(x) ? init : (x as T)
     } catch {
       return init
     }
@@ -57,22 +61,40 @@ function usePersist<T>(key: string, init: T) {
   return [v, setV] as const
 }
 export const STORAGE_KEYS = ["sr.profile", "sr.ratings", "sr.saved", "sr.streak"]
+const isObj = (x: unknown) => !!x && typeof x === "object" && !Array.isArray(x)
+const isStrArr = (x: unknown) => Array.isArray(x) && x.every((v) => typeof v === "string")
+const isProfile = (x: unknown) => x === null || (isObj(x) && typeof (x as { rank?: unknown }).rank === "string" && RANKS.includes((x as { rank: string }).rank) && typeof (x as { ship?: unknown }).ship === "string")
+const isBrief = (x: unknown) => {
+  if (x === null) return true
+  if (!isObj(x)) return false
+  const b = x as Record<string, unknown>
+  return typeof b.major === "string" && typeof b.port === "string" && typeof b.rank === "string" && typeof b.date === "string" && Array.isArray(b.done) && typeof b.plan === "string"
+}
 
-const TODAY = Date.UTC(2026, 9, 18)
-const TODAY_KEY = "2026-10-18"
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+const pad2 = (n: number) => String(n).padStart(2, "0")
+/** Midnight UTC of the device's local date, so day counts don't drift with the time of day. */
+const todayUTC = () => {
+  const d = new Date()
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
+}
+export const isoIn = (days: number) => {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
 function daysTo(iso: string) {
   const [y, m, d] = iso.split("-").map(Number)
-  return y ? Math.round((Date.UTC(y, m - 1, d) - TODAY) / 86400000) : 0
+  return y ? Math.round((Date.UTC(y, m - 1, d) - todayUTC()) / 86400000) : 0
 }
 function describeDate(iso: string) {
-  const [y, m, d] = iso.split("-").map(Number)
+  const [y, m, d] = (iso || "").split("-").map(Number)
   if (!y) return { label: "Date not set", rel: "" }
   const t = Date.UTC(y, m - 1, d)
-  const days = Math.round((t - TODAY) / 86400000)
+  const days = Math.round((t - todayUTC()) / 86400000)
   const rel = days > 1 ? `in ${days} days` : days === 1 ? "tomorrow" : days === 0 ? "today" : "date has passed"
-  return { label: `${DAYS[new Date(t).getUTCDay()]} ${d} ${MON[m - 1]}`, rel }
+  return { label: `${DAYS[new Date(t).getUTCDay()]} ${d} ${MON[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ""}`, rel }
 }
 
 /** Renders the 390×844 app at whatever width its box has. */
@@ -102,7 +124,7 @@ export function ScaledScreen({ children }: { children: ReactNode }) {
 type NavItem = { k: string; label: string; Icon: (p: { size?: number }) => ReactNode; target: Screen }
 
 export function PhoneApp({
-  screen, go: rawGo, night, setNight, framed = true, variant = "phone", storyId, setStoryId, onExit, officialSignal, deck: deckProp, askSeed: askSeedProp, askSignal,
+  screen, go: rawGo, night, setNight, framed = true, variant = "phone", storyId, setStoryId, onExit, officialSignal, deck: deckProp, askSeed: askSeedProp, askSignal, initialRank, planIntent,
 }: {
   screen: Screen; go: (s: Screen) => void; night: boolean; setNight: (v: boolean) => void; framed?: boolean
   variant?: "phone" | "web"; storyId?: number; setStoryId?: (id: number | null) => void; onExit?: () => void
@@ -110,30 +132,57 @@ export function PhoneApp({
   deck?: DeckId
   askSeed?: string
   askSignal?: number
+  initialRank?: string
+  planIntent?: { select: string; cycle?: "monthly" | "annual"; n: number }
 }) {
+  const planDone = useRef(0)
   const wallet = useWallet()
   const [deck, setDeck] = useState<DeckId>(deckProp ?? "trending")
   useEffect(() => {
     if (deckProp) setDeck(deckProp)
   }, [deckProp])
-  const [askSeed, setAskSeed] = useState<string | null>(askSeedProp ?? null)
+  // a question typed on the site waits in the box (the price shows there); one from Today is sent straight away
+  const [askSeed, setAskSeed] = useState<{ q: string; auto: boolean } | null>(askSeedProp ? { q: askSeedProp, auto: false } : null)
   useEffect(() => {
-    if (askSignal && askSeedProp) setAskSeed(askSeedProp)
+    if (askSignal && askSeedProp) setAskSeed({ q: askSeedProp, auto: false })
   }, [askSignal]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [profile, setProfile] = usePersist<{ rank: string; ship: string } | null>("sr.profile", null)
-  const [ratings, setRatings] = usePersist<Record<string, "yes" | "unsure">>("sr.ratings", {})
-  const [saved, setSaved] = usePersist<string[]>("sr.saved", [])
-  const [streak, setStreak] = usePersist<{ n: number; last: string }>("sr.streak", { n: 0, last: "" })
-  const [libDone, setLibDone] = usePersist<Record<string, boolean>>("sr.lib", {})
+  const [profile, setProfile] = usePersist<{ rank: string; ship: string } | null>("sr.profile", null, isProfile)
+  const [ratings, setRatings] = usePersist<Record<string, "yes" | "unsure">>("sr.ratings", {}, isObj)
+  const [saved, setSaved] = usePersist<string[]>("sr.saved", [], isStrArr)
+  const [streak, setStreak] = usePersist<{ n: number; last: string }>("sr.streak", { n: 0, last: "" }, isObj)
+  const [libDone, setLibDone] = usePersist<Record<string, boolean>>("sr.lib", {}, isObj)
+  // a plan chosen on the site opens once the user has picked a rank
+  useEffect(() => {
+    if (profile && planIntent && planIntent.n !== planDone.current) {
+      planDone.current = planIntent.n
+      const t = setTimeout(() => wallet.openPlans({ select: planIntent.select, cycle: planIntent.cycle, tab: planIntent.select.startsWith("t") ? "topup" : "plans" }), 350)
+      return () => clearTimeout(t)
+    }
+  }, [profile, planIntent?.n]) // eslint-disable-line react-hooks/exhaustive-deps
   const [bankMode, setBankMode] = useState<"real" | "official">(officialSignal ? "official" : "real")
   useEffect(() => {
     if (officialSignal) setBankMode("official")
   }, [officialSignal])
-  const [brief, setBrief] = useState<Brief | null>(null)
-  const [briefDate, setBriefDate] = useState("2026-10-22")
-  const [done, setDone] = useState<boolean[]>([])
+  type SavedBrief = { major: string; port: string; rank: string; date: string; done: boolean[]; plan: string }
+  const [briefSaved, setBriefSaved] = usePersist<SavedBrief | null>("sr.brief", null, isBrief)
+  const brief = useMemo<Brief | null>(() => (briefSaved ? buildBrief(briefSaved.major, briefSaved.port, briefSaved.rank) : null), [briefSaved?.major, briefSaved?.port, briefSaved?.rank]) // eslint-disable-line react-hooks/exhaustive-deps
+  const briefDate = briefSaved?.date ?? ""
+  const done = briefSaved?.done ?? []
+  const setDone = (d: boolean[]) => setBriefSaved((b) => (b ? { ...b, done: d } : b))
+  const setPlan = (t: string) => setBriefSaved((b) => (b ? { ...b, plan: t } : b))
+  const building = useRef(false)
   const [bankTopic, setBankTopic] = useState<Topic | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && navigator.onLine === false)
+  useEffect(() => {
+    const on = () => setOffline(false), off = () => setOffline(true)
+    window.addEventListener("online", on)
+    window.addEventListener("offline", off)
+    return () => {
+      window.removeEventListener("online", on)
+      window.removeEventListener("offline", off)
+    }
+  }, [])
   const [localStory, setLocalStory] = useState<number | null>(null)
   const story = storyId ?? localStory
   const pickStory = setStoryId ?? setLocalStory
@@ -149,21 +198,17 @@ export function PhoneApp({
     return () => clearTimeout(t)
   }, [toast])
 
-  // Arriving at a feature from the site skips onboarding with a default profile
-  useEffect(() => {
-    if (!profile && screen !== "today") setProfile({ rank: "2/O", ship: "Product" })
-  }, [screen]) // eslint-disable-line react-hooks/exhaustive-deps
-
   const rank = profile?.rank ?? "2/O"
   const evidence = useMemo(() => (brief ? brief.focus.slice(0, 3).flatMap((f) => TOPIC_EVIDENCE[f.topic].slice(0, 3).map((e) => ({ e, topic: f.topic }))) : []), [brief])
-  const readiness = brief ? Math.round(25 + (75 * done.filter(Boolean).length) / Math.max(1, evidence.length)) : 0
+  const readiness = brief ? Math.round((100 * evidence.filter((_, i) => done[i]).length) / Math.max(1, evidence.length)) : 0
 
   const build = (major: string, port: string, r: string, date: string) => {
-    if (!wallet.spend(COSTS.brief, `Brief: ${major} · ${port || "any port"} · ${r}`)) return
-    setBrief(buildBrief(major, port, r))
-    setBriefDate(date)
-    setDone([])
+    if (building.current) return
+    if (!wallet.charge(COSTS.brief, `Brief: ${major} · ${port || "any port"} · ${r}`, "briefs")) return
+    building.current = true
+    setBriefSaved({ major, port, rank: r, date, done: [], plan: "" })
     go("loading")
+    setTimeout(() => (building.current = false), 1500)
   }
 
   const tab =
@@ -179,12 +224,13 @@ export function PhoneApp({
   ]
   const secondary: NavItem[] = [
     { k: "practice", label: "AI inspector", Icon: I.Mic, target: "practice" },
+    { k: "photo", label: "Photo check", Icon: I.Camera, target: "photo" },
     { k: "bank", label: "Questions", Icon: I.Book, target: "bank" },
     { k: "brief", label: "Inspection brief", Icon: I.Clipboard, target: brief ? "brief" : "setup" },
     { k: "kit", label: "Ready kit", Icon: I.Briefcase, target: "kit" },
     { k: "me", label: "Progress & badges", Icon: I.Award, target: "me" },
     { k: "share", label: "Share a debrief", Icon: I.Plus, target: "share" },
-    { k: "wallet", label: "Credits", Icon: I.Wallet, target: "wallet" },
+    { k: "wallet", label: "Plans & credits", Icon: I.Wallet, target: "wallet" },
   ]
   const openDeck = (d: DeckId) => {
     setDeck(d)
@@ -194,6 +240,11 @@ export function PhoneApp({
 
   const content = (
     <div className="relative min-h-0 flex-1">
+      {offline && profile && (
+        <div role="status" className="absolute inset-x-4 top-1 z-30 flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-[12px] leading-snug text-bg shadow-lg">
+          <I.Wifi size={14} className="shrink-0" /> No signal. Flashcards, Spot, the radar, the ready kit and your saved brief still work; AI needs a connection.
+        </div>
+      )}
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={profile ? screen + (screen === "stories" ? String(story) : "") : "onboard"}
@@ -204,7 +255,7 @@ export function PhoneApp({
           className="absolute inset-0 flex flex-col"
         >
           {!profile ? (
-            <Onboard onDone={(p) => { setProfile(p); go("today") }} />
+            <Onboard initialRank={initialRank} onDone={(p) => { setProfile(p); if (screen === "today") go("today") }} />
           ) : (
             <>
               {screen === "today" && (
@@ -216,14 +267,14 @@ export function PhoneApp({
                   openStory={(id) => { pickStory(id); rawGo("stories") }}
                   libDone={libDone}
                   openLibrary={() => { setBankMode("official"); go("bank") }}
-                  openAsk={(q) => { setAskSeed(q ?? null); go("ask") }}
+                  openAsk={(q) => { setAskSeed(q ? { q, auto: true } : null); go("ask") }}
                 />
               )}
               {screen === "stories" && <StoriesScreen storyId={story} setStoryId={pickStory} rank={rank} />}
-              {(screen === "setup" || ((screen === "brief" || screen === "loading") && !brief)) && <Setup rank={rank} onBuild={build} />}
+              {(screen === "setup" || ((screen === "brief" || screen === "loading") && !brief)) && <Setup rank={rank} onBuild={build} hasBrief={!!brief} onBack={() => go(brief ? "brief" : "today")} />}
               {screen === "loading" && brief && <Loading brief={brief} onDone={() => go("brief")} />}
               {screen === "brief" && brief && (
-                <BriefScreen brief={brief} date={briefDate} go={go} evidence={evidence} done={done} setDone={setDone} readiness={readiness} night={night} toast={setToast} />
+                <BriefScreen brief={brief} date={briefDate} go={go} evidence={evidence} done={done} setDone={setDone} readiness={readiness} night={night} toast={setToast} plan={briefSaved?.plan ?? ""} setPlan={setPlan} />
               )}
               {screen === "practice" && (
                 <>
@@ -237,13 +288,14 @@ export function PhoneApp({
               )}
               {screen === "train" && <TrainScreen rank={rank} go={go} openDeck={openDeck} />}
               {screen === "ask" && (
-                <AskScreen rank={rank} ship={profile?.ship ?? "Product"} seed={askSeed} clearSeed={() => setAskSeed(null)} openStory={(id) => { pickStory(id); rawGo("stories") }} go={go} />
+                <AskScreen rank={rank} ship={profile?.ship ?? "Product"} seed={askSeed?.q ?? null} seedAuto={askSeed?.auto ?? false} clearSeed={() => setAskSeed(null)} openStory={(id) => { pickStory(id); rawGo("stories") }} go={go} />
               )}
               {(screen === "session" || screen === "drill") && <SessionScreen key={deck + screen} deck={screen === "drill" ? "trending" : deck} rank={rank} go={go} />}
+              {screen === "photo" && <PhotoCheck rank={rank} ship={profile?.ship ?? "Product"} onAsk={(q) => { setAskSeed({ q, auto: false }); go("ask") }} />}
               {screen === "spot" && <SpotScreen go={go} />}
               {screen === "radar" && <RadarScreen rank={rank} go={go} />}
               {screen === "kit" && <KitScreen go={go} />}
-              {screen === "me" && <MeScreen go={go} />}
+              {screen === "me" && <MeScreen go={go} rank={rank} ship={profile?.ship ?? "Product"} setProfile={setProfile} night={night} setNight={setNight} />}
               {screen === "share" && <Share night={night} />}
               {screen === "wallet" && <WalletScreen go={go} />}
             </>
@@ -319,8 +371,8 @@ export function PhoneApp({
           <div className="mt-2 flex shrink-0 flex-col gap-2.5 rounded-2xl bg-white/60 p-4">
             <span className="font-mono text-[11px] tracking-[0.1em] text-mute uppercase">Your credits</span>
             <span className="tnum display text-[30px] leading-none font-bold">{wallet.balance}</span>
-            <span className="text-[12.5px] leading-snug text-mute">Brief {COSTS.brief} · Interview {COSTS.interview} · Story {COSTS.story}</span>
-            <button type="button" onClick={() => wallet.openTopUp()} className="h-10 rounded-xl bg-primary text-[13.5px] font-semibold text-on-primary">Get more credits</button>
+            <span className="text-[12.5px] leading-snug text-mute">{wallet.plan.name} plan{wallet.perks.pass && wallet.plan.id === "free" ? " + Voyage pass" : ""} · Interview {COSTS.interview} · Brief {COSTS.brief}</span>
+            <button type="button" onClick={() => (wallet.plan.id === "free" && !wallet.perks.pass ? wallet.openPlans() : go("wallet"))} className="h-10 rounded-xl bg-primary text-[13.5px] font-semibold text-on-primary">{wallet.plan.id === "free" && !wallet.perks.pass ? "Upgrade" : "Plans & credits"}</button>
           </div>
           <button
             type="button"
@@ -341,8 +393,8 @@ export function PhoneApp({
 }
 
 /* ---------------- Onboarding ---------------- */
-function Onboard({ onDone }: { onDone: (p: { rank: string; ship: string }) => void }) {
-  const [rank, setRank] = useState<string | null>(null)
+function Onboard({ onDone, initialRank }: { onDone: (p: { rank: string; ship: string }) => void; initialRank?: string }) {
+  const [rank, setRank] = useState<string | null>(initialRank && RANKS.includes(initialRank) ? initialRank : null)
   const [ship, setShip] = useState("Product")
   return (
     <Scroll className="gap-5 pt-4">
@@ -355,7 +407,7 @@ function Onboard({ onDone }: { onDone: (p: { rank: string; ship: string }) => vo
         <IconTile icon={I.Coin} color="teal" size={40} />
         <span className="flex flex-col">
           <span className="text-[14.5px] font-bold">{WELCOME_CREDITS} free credits are waiting</span>
-          <span className="text-[12.5px] leading-snug text-mute">Enough for a brief, a mock interview and three full stories. Flashcards, the game, the radar and the ready kit are free every day.</span>
+          <span className="text-[12.5px] leading-snug text-mute">{WELCOME_CREDITS - PLANS.free.credits} welcome credits plus {PLANS.free.credits} every month: enough for a mock interview, a brief and a few deep AI answers. Flashcards, the game, the radar and the ready kit are free every day.</span>
         </span>
       </div>
       <fieldset className="flex flex-col gap-2.5">
@@ -433,8 +485,9 @@ function Today(p: {
   const weak = (unsure.size ? [...unsure] : [...relevant].sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0))).slice(0, 4)
   const lib = libForRank(p.rank)
   const libReady = lib.filter((q) => p.libDone[q.n]).length
-  const askedOfRank = BANK.filter((q) => q.rank === p.rank)
-  const mine = askedOfRank.length ? askedOfRank : BANK.filter((q) => relevant.includes(q.topic)).slice(0, 40)
+  // same rule as the Questions screen's "For your rank" filter, so the two counts agree
+  const mine = BANK.filter((q) => (q.rank ? q.rank === p.rank : relevant.includes(q.topic)))
+  const tested = prog.readiness(p.rank).filter((r) => r.score != null).sort((a, b) => (a.score as number) - (b.score as number))
   const bankYes = mine.filter((q) => p.ratings[q.id] === "yes").length
   const pct = Math.round(((libReady + bankYes) / Math.max(1, lib.length + mine.length)) * 100)
   const tip = LESSONS[new Date().getDate() % LESSONS.length]
@@ -447,12 +500,12 @@ function Today(p: {
   const actions: { label: string; sub: string; icon: (q: { size?: number }) => ReactNode; color: TileColor; tag: ReactNode; onClick: () => void }[] = [
     { label: "Spot the observation", sub: `${OBS.length} real findings`, icon: I.Target, color: "orange", tag: <FreeTag />, onClick: () => p.go("spot") },
     { label: "Flashcards", sub: due ? `${due} due today` : "10 fresh cards ready", icon: I.Layers, color: "blue", tag: <FreeTag />, onClick: () => p.go("train") },
-    { label: "Observation radar", sub: "Where findings land", icon: I.Radar, color: "indigo", tag: <FreeTag />, onClick: () => p.go("radar") },
+    { label: "Photo check", sub: "What would an inspector flag?", icon: I.Camera, color: "indigo", tag: <CostTag cost={COSTS.photo} className="text-mute" />, onClick: () => p.go("photo") },
     { label: "Ready kit", sub: `${KIT_TOTAL} pre-inspection checks`, icon: I.Briefcase, color: "amber", tag: <FreeTag />, onClick: () => p.go("kit") },
     { label: "Official checklist", sub: `${lib.length} questions for your rank`, icon: I.ListCheck, color: "teal", tag: <FreeTag />, onClick: p.openLibrary },
-    { label: "Inspection brief", sub: "Your oil major, port and rank", icon: I.Clipboard, color: "sky", tag: <CostTag cost={COSTS.brief} className="text-mute" />, onClick: () => p.go(p.brief ? "brief" : "setup") },
-    { label: "AI inspector", sub: "Graded answers and follow-ups", icon: I.Mic, color: "violet", tag: <CostTag cost={COSTS.interview} className="text-mute" />, onClick: () => p.go("practice") },
-    { label: "Inspection stories", sub: `${STORIES.length} real inspections`, icon: I.Newspaper, color: "rose", tag: <CostTag cost={COSTS.story} className="text-mute" />, onClick: () => p.go("stories") },
+    { label: "Inspection brief", sub: p.brief ? "Open your brief" : "Your oil major, port and rank", icon: I.Clipboard, color: "sky", tag: p.brief ? <FreeTag label="Ready" /> : <CostTag cost={COSTS.brief} className="text-mute" />, onClick: () => p.go(p.brief ? "brief" : "setup") },
+    { label: "AI inspector", sub: "Graded answers, voice mode", icon: I.Mic, color: "violet", tag: <CostTag cost={COSTS.interview} className="text-mute" />, onClick: () => p.go("practice") },
+    { label: "Inspection stories", sub: `${STORIES.length} real inspections`, icon: I.Newspaper, color: "rose", tag: wallet.perks.allStories ? <FreeTag label="Included" /> : <CostTag cost={COSTS.story} className="text-mute" />, onClick: () => p.go("stories") },
   ]
 
   return (
@@ -484,6 +537,8 @@ function Today(p: {
           {prog.level.next ? ` · ${prog.level.toNext} XP to ${prog.level.next.name}` : ""}
         </p>
       </div>
+
+      <WalletNudge onOpen={() => p.go("wallet")} />
 
       <MissionsCard go={p.go} />
 
@@ -530,7 +585,7 @@ function Today(p: {
           <span className="flex min-w-0 flex-1 flex-col gap-1">
             <span className="text-[12px] font-semibold text-hero-muted">Next inspection</span>
             <span className="display text-[19px] leading-tight font-bold">{p.brief.major} · {p.brief.port || "Any port"}</span>
-            <span className="text-[13px] text-hero-muted">{when.label} · {when.rel}</span>
+            <span className="text-[13px] text-hero-muted">{p.briefDate ? `${when.label} · ${when.rel}` : "Set the inspection date"}</span>
           </span>
           <AnimatedCircularProgressBar value={p.readiness} gaugePrimaryColor="var(--hero-accent)" gaugeSecondaryColor="var(--hero-track)" className="size-[70px] shrink-0 text-[16px] text-hero-ink" />
         </button>
@@ -553,33 +608,38 @@ function Today(p: {
         </div>
       </Section>
 
-      <Section title={unsure.size ? "Your weak spots" : `Most asked of ${p.rank}s`} aside="tap to study">
+      <Section title={tested.length ? "Your weakest topics" : unsure.size ? "Your weak spots" : `Most asked of ${p.rank}s`} aside={tested.length ? "from your results" : "tap to study"}>
         <div className="flex flex-wrap gap-2">
-          {weak.map((t) => (
+          {(tested.length ? tested.slice(0, 4).map((r) => [r.topic, r.score] as const) : weak.map((t) => [t, null] as const)).map(([t, sc]) => (
             <button key={t} type="button" onClick={() => p.openTopic(t)} className="flex h-11 items-center gap-2 rounded-full border border-line bg-surface pr-3.5 pl-1.5 text-[13px] font-medium hover:border-mute">
               <TopicBadge topic={t} size={30} />
               {t}
+              {sc != null && <span className={cn("tnum font-mono text-[11.5px] font-semibold", sc >= 75 ? "text-sea" : sc >= 50 ? "text-amber-ink" : "text-signal-ink")}>{sc}%</span>}
             </button>
           ))}
         </div>
+        {tested.length > 0 && <button type="button" onClick={() => p.go("me")} className="self-start text-[13px] font-semibold text-primary">See readiness by topic →</button>}
       </Section>
     </Scroll>
   )
 }
 
-function FreeTag() {
-  return <span className="rounded-full bg-sea-soft px-2 py-0.5 text-[11px] font-semibold text-sea">Free</span>
+function FreeTag({ label = "Free" }: { label?: string }) {
+  return <span className="rounded-full bg-sea-soft px-2 py-0.5 text-[11px] font-semibold text-sea">{label}</span>
 }
 
 /* ---------------- Brief setup ---------------- */
-function Setup({ rank: r0, onBuild }: { rank: string; onBuild: (m: string, p: string, r: string, d: string) => void }) {
+function Setup({ rank: r0, onBuild, hasBrief, onBack }: { rank: string; onBuild: (m: string, p: string, r: string, d: string) => void; hasBrief?: boolean; onBack?: () => void }) {
   const [major, setMajor] = useState("ENOC")
   const [port, setPort] = useState("Durres")
   const [rank, setRank] = useState(r0)
-  const [date, setDate] = useState("2026-10-22")
+  const [date, setDate] = useState(() => isoIn(4))
+  const min = isoIn(0)
+  const max = isoIn(365)
+  const bad = !date ? "Pick the inspection date." : date < min ? "That date has passed. Pick today or a later date." : date > max ? "Pick a date within the next year." : ""
   return (
     <>
-      <TopBar title="Build a brief" right={<CreditPill />} />
+      <TopBar title={hasBrief ? "New brief" : "Build a brief"} onBack={hasBrief ? onBack : undefined} right={<CreditPill />} />
       <Scroll>
         <p className="text-[14px] leading-snug text-mute">Pick who's inspecting and where. The brief is built from debriefs by officers who faced the same.</p>
         <div className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-4">
@@ -599,7 +659,7 @@ function Setup({ rank: r0, onBuild }: { rank: string; onBuild: (m: string, p: st
             </label>
             <label className="flex flex-col gap-1.5" htmlFor="app-date">
               <Label>Date</Label>
-              <input id="app-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11 rounded-xl border border-line bg-surface px-2 text-[13px] text-ink" />
+              <input id="app-date" type="date" value={date} min={min} max={max} onChange={(e) => setDate(e.target.value)} className={cn("h-11 rounded-xl border bg-surface px-2 text-[13px] text-ink", bad ? "border-signal" : "border-line")} />
             </label>
           </div>
           <fieldset className="flex flex-col gap-2">
@@ -609,11 +669,12 @@ function Setup({ rank: r0, onBuild }: { rank: string; onBuild: (m: string, p: st
             </div>
           </fieldset>
         </div>
-        <ShimmerButton onClick={() => onBuild(major, port, rank, date)} borderRadius="14px" background="var(--primary)" shimmerColor="var(--signal)" className="h-[54px] w-full justify-between border-0 px-5 text-[15.5px] font-semibold text-on-primary">
+        {bad && <p className="text-center text-[12.5px] font-medium text-signal-ink">{bad}</p>}
+        <ShimmerButton onClick={() => !bad && onBuild(major, port, rank, date)} disabled={!!bad} borderRadius="14px" background="var(--primary)" shimmerColor="var(--signal)" className="h-[54px] w-full justify-between border-0 px-5 text-[15.5px] font-semibold text-on-primary disabled:opacity-50">
           <span>Build my {major} brief</span>
           <CostTag cost={COSTS.brief} className="opacity-80" />
         </ShimmerButton>
-        <p className="text-center text-[12px] leading-snug text-mute">Low on credits? Share one debrief and earn {EARN.share}.</p>
+        <p className="text-center text-[12px] leading-snug text-mute">Includes a day-by-day AI prep plan. {hasBrief ? "Your current brief is replaced." : `Low on credits? Share a debrief and earn ${EARN.share}.`}</p>
       </Scroll>
     </>
   )
@@ -657,7 +718,7 @@ function Loading({ brief, onDone }: { brief: Brief; onDone: () => void }) {
 /* ---------------- Brief ---------------- */
 function BriefScreen(p: {
   brief: Brief; date: string; go: (s: Screen) => void; evidence: { e: string; topic: Topic }[]; done: boolean[]; setDone: (d: boolean[]) => void
-  readiness: number; night: boolean; toast: (s: string) => void
+  readiness: number; night: boolean; toast: (s: string) => void; plan: string; setPlan: (t: string) => void
 }) {
   const { brief } = p
   const listRef = useRef<HTMLDivElement>(null)
@@ -669,9 +730,25 @@ function BriefScreen(p: {
     if (next.every(Boolean)) burst(listRef.current, p.night ? { colors: NIGHT_COLORS } : {})
   }
   const dates = brief.matched.map((d) => d.date).sort()
+  const summary = () =>
+    [
+      `NilObs brief: ${brief.major} · ${brief.port || "any port"} · ${brief.rank} · ${when.label}`,
+      `Likely focus: ${brief.focus.map((f) => f.topic).join(", ")}`,
+      `Have ready:\n${p.evidence.map((x, i) => `${p.done[i] ? "[x]" : "[ ]"} ${x.e}`).join("\n")}`,
+      `Questions asked of ${brief.rank}s:\n${brief.questions.slice(0, 6).map((q, i) => `${i + 1}. ${q.q}`).join("\n")}`,
+      p.plan ? `Prep plan:\n${p.plan.replace(/\*\*/g, "")}` : "",
+    ].filter(Boolean).join("\n\n")
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(summary())
+      p.toast("Brief copied. Paste it into notes or a message; it reads fine without signal.")
+    } catch {
+      p.toast("Couldn't copy here. Try Send to WhatsApp instead.")
+    }
+  }
   return (
     <>
-      <TopBar title="Your brief" onBack={() => p.go("today")} />
+      <TopBar title="Your brief" onBack={() => p.go("today")} right={<button type="button" onClick={() => p.go("setup")} className="h-9 rounded-full border border-line bg-surface px-3 text-[12.5px] font-semibold">New brief</button>} />
       <Scroll className="gap-5">
         <div className="rounded-[20px] bg-hero p-[18px] text-hero-ink">
           <div className="flex items-start justify-between gap-3">
@@ -695,20 +772,20 @@ function BriefScreen(p: {
             <p className="mt-1 text-[12.5px] leading-snug text-hero-muted">
               {brief.matched.length
                 ? `Based on ${brief.matched.length} matching debrief${brief.matched.length === 1 ? "" : "s"} (${fmtDate(dates[0])}${dates.length > 1 ? `–${fmtDate(dates[dates.length - 1])}` : ""}), topped up from all ${DEBRIEFS.length}.`
-                : `No ${brief.major} debriefs yet, so this is built from all ${DEBRIEFS.length}.`}
+                : `No debriefs for ${brief.major === "Other" ? "this inspecting body" : brief.major} yet, so this is built from all ${DEBRIEFS.length}.`}
             </p>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => p.toast("In the live app this opens WhatsApp with the brief attached.")} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-hero-track text-[13px] font-semibold">
+            <a href={`https://wa.me/?text=${encodeURIComponent(summary().slice(0, 3500))}`} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-xl bg-hero-track text-[13px] font-semibold">
               <I.Send size={16} /> Send to WhatsApp
-            </button>
-            <button type="button" onClick={() => p.toast("Saved for offline reading. No signal needed at sea.")} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-hero-track text-[13px] font-semibold">
-              <I.Download size={16} /> Save offline
+            </a>
+            <button type="button" onClick={copy} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-hero-track text-[13px] font-semibold">
+              <I.FileText size={16} /> Copy the brief
             </button>
           </div>
         </div>
 
-        <BriefPlan brief={brief} date={when.label} evidence={p.evidence.map((x) => x.e)} daysLeft={daysTo(p.date)} />
+        <BriefPlan brief={brief} date={when.label} evidence={p.evidence.map((x) => x.e)} daysLeft={daysTo(p.date)} plan={p.plan} setPlan={p.setPlan} />
 
         <Section title="Likely focus" aside="debriefs that raised it">
           <div className="flex flex-col rounded-2xl border border-line bg-surface px-3.5">
@@ -850,7 +927,7 @@ function Interview({ rank, night }: { rank: string; night: boolean }) {
           </span>
           <button
             type="button"
-            onClick={() => wallet.spend(COSTS.interview, `Mock interview (${rank in INTERVIEW ? rank : "2/O"})`) && setStarted(true)}
+            onClick={() => !!wallet.charge(COSTS.interview, `Mock interview (${rank in INTERVIEW ? rank : "2/O"})`, "interviews") && setStarted(true)}
             className="flex h-12 items-center justify-between rounded-xl bg-hero-accent px-4 text-[15px] font-semibold text-[#1a0a00]"
           >
             Start session <CostTag cost={COSTS.interview} />
@@ -860,7 +937,7 @@ function Interview({ rank, night }: { rank: string; night: boolean }) {
           <span className="text-[14px] font-bold">Answer like you're ready</span>
           <span className="text-[13px] leading-snug text-mute">State the fact. Say where the SMS covers it. Show the record that proves it's done.</span>
         </div>
-        <p className="text-center text-[12.5px] text-mute">Want something free? The daily drill costs nothing.</p>
+        <p className="text-center text-[12.5px] text-mute">Want something free? Flashcards and Spot the observation cost nothing.</p>
       </Scroll>
     )
   }
@@ -871,7 +948,7 @@ function Interview({ rank, night }: { rank: string; night: boolean }) {
       <Scroll className="items-center pt-6 text-center">
         <AnimatedCircularProgressBar value={Math.round((total / max) * 100)} gaugePrimaryColor="var(--sea)" gaugeSecondaryColor="var(--line)" className="size-[120px] text-[26px] text-ink" />
         <h3 className="display text-[24px] font-bold">Session done</h3>
-        <p className="max-w-[30ch] text-[14px] leading-snug text-mute">You covered {total} of {max} points inspectors look for. The live app keeps a history so you can watch weak topics improve.</p>
+        <p className="max-w-[30ch] text-[14px] leading-snug text-mute">You covered {total} of {max} points inspectors look for. With AI switched on, every graded interview is saved to your progress.</p>
         <button type="button" onClick={() => { setQi(0); setScores([]); setStarted(false) }} className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-semibold text-on-primary">
           <I.Refresh size={17} /> New session
         </button>
@@ -1168,31 +1245,53 @@ function Bank(p: {
             </article>
           )
         })}
-        {!list.length && <p className="pt-6 text-center text-[13px] text-mute">Nothing matches. Clear a filter or try “radar”.</p>}
+        {!list.length && <p className="pt-6 text-center text-[13px] text-mute">Nothing matches. Clear a filter or try another word.</p>}
       </Scroll>
     </>
   )
 }
 
 /* ---------------- Share ---------------- */
+const words = (t: string) => new Set(t.toLowerCase().match(/[a-z]{3,}/g) || [])
+/** Returns why a debrief can't earn credits yet, or "" if it looks like a real one. */
+function debriefProblem(text: string, parsed: ReturnType<typeof structureDebrief>) {
+  const mine = words(text), sample = words(SAMPLE_RAW)
+  let shared = 0
+  for (const w of mine) if (sample.has(w)) shared++
+  if (mine.size && shared / mine.size > 0.6) return "That's mostly the example. Write your own debrief to share it."
+  if (text.length < 120 || parsed.questions < 2) return "Add a bit more: where it was, who inspected, and what they asked or found. A few lines is enough."
+  const facts = [parsed.port !== "Not found", parsed.major !== "Not stated", parsed.date !== "Not found"].filter(Boolean).length
+  if (facts < 2) return "Say where and when it was, and who inspected (the oil major), so the next crew can use it."
+  const distinct = new Set(text.toLowerCase().split(/[\s,;.]+/).filter((w) => w.length > 3))
+  if (distinct.size < 15) return "That doesn't read like a debrief yet. Describe what the inspector asked and checked."
+  return ""
+}
 function Share({ night }: { night: boolean }) {
   const wallet = useWallet()
-  const [raw, setRaw] = useState(SAMPLE_RAW)
+  const [raw, setRaw] = useState("")
   const [stage, setStage] = useState<"edit" | "working" | "done">("edit")
+  const [err, setErr] = useState("")
+  const [earned, setEarned] = useState<boolean | null>(null)
   const doneRef = useRef<HTMLDivElement>(null)
   const parsed = useMemo(() => structureDebrief(raw), [raw])
+  const status = wallet.share()
   const run = () => {
+    const text = raw.trim()
+    const problem = debriefProblem(text, parsed)
+    if (problem) return setErr(problem)
+    setErr("")
     setStage("working")
     setTimeout(() => {
+      const ok = wallet.recordShare(text)
+      setEarned(ok)
       setStage("done")
-      wallet.earn(EARN.share, "Shared a debrief")
-      setTimeout(() => burst(doneRef.current, night ? { colors: NIGHT_COLORS } : {}), 900)
+      if (ok) setTimeout(() => burst(doneRef.current, night ? { colors: NIGHT_COLORS } : {}), 900)
     }, 1300)
   }
   const fields: [string, string][] = [["Port", parsed.port], ["Oil major", parsed.major], ["Date", parsed.date], ["Area", parsed.area], ["Questions", `${parsed.questions} found`]]
   return (
     <>
-      <TopBar title="Share a debrief" right={<span className="tnum mr-1 rounded-full bg-sea-soft px-2 py-1 font-mono text-[11px] font-semibold whitespace-nowrap text-sea">+{EARN.share}</span>} />
+      <TopBar title="Share a debrief" right={status.ok ? <span className="tnum mr-1 rounded-full bg-sea-soft px-2 py-1 font-mono text-[11px] font-semibold whitespace-nowrap text-sea">+{EARN.share}</span> : undefined} />
       <Scroll>
         {stage === "edit" ? (
           <>
@@ -1200,13 +1299,17 @@ function Share({ night }: { night: boolean }) {
               <I.Shield size={18} className="shrink-0" />
               <span>Anonymous by design. Your name, the ship and the inspector's name are removed before a moderator sees it.</span>
             </div>
-            <p className="text-[13.5px] leading-snug text-mute">Paste it the way you'd post it in a group. The next officer facing the same inspection gets the benefit.</p>
+            <p className="text-[13.5px] leading-snug text-mute">
+              Paste it the way you'd post it in a group. The next officer facing the same inspection gets the benefit.{" "}
+              {status.ok ? `You earn ${EARN.share} credits for each debrief, up to ${EARN.sharePerMonth} a month.` : status.why}
+            </p>
             <label htmlFor="app-raw" className="sr-only">Your debrief</label>
-            <textarea id="app-raw" value={raw} onChange={(e) => setRaw(e.target.value)} rows={10} className="rounded-2xl border border-line bg-surface p-3.5 font-mono text-[12.5px] leading-relaxed" />
-            <button type="button" onClick={run} className="flex h-[52px] items-center justify-center gap-2 rounded-[14px] bg-primary text-[15px] font-semibold text-on-primary">
+            <textarea id="app-raw" value={raw} onChange={(e) => { setRaw(e.target.value); setErr("") }} rows={10} placeholder={"Where and when, who inspected, how long, and what they asked or found.\ne.g. SIRE at Fujairah, 12 Oct, Shell. Bridge 2 hrs: asked for ECDIS safety contour, UKC calc..."} className="rounded-2xl border border-line bg-surface p-3.5 font-mono text-[12.5px] leading-relaxed" />
+            {!raw && <button type="button" onClick={() => setRaw(SAMPLE_RAW)} className="self-start text-[12.5px] font-semibold text-primary">See an example</button>}
+            {err && <p className="text-[13px] font-medium text-signal-ink">{err}</p>}
+            <button type="button" onClick={run} disabled={!raw.trim()} className="flex h-[52px] items-center justify-center gap-2 rounded-[14px] bg-primary text-[15px] font-semibold text-on-primary disabled:opacity-50">
               <I.Cpu size={18} /> Structure it
             </button>
-            <p className="text-center text-[11.5px] text-mute">In the live app you can also send it to the WhatsApp number.</p>
           </>
         ) : stage === "working" ? (
           <div className="flex flex-col items-center gap-4 pt-10">
@@ -1240,13 +1343,13 @@ function Share({ night }: { night: boolean }) {
               <div ref={doneRef} className="flex items-center justify-between rounded-2xl border border-line bg-surface px-3.5 py-3">
                 <span className="flex flex-col">
                   <span className="text-[14px] font-bold">Sent for review</span>
-                  <span className="text-[12px] text-mute">A moderator checks it, usually within a day</span>
+                  <span className="text-[12px] text-mute">{earned ? "A moderator checks it, usually within a day" : "Thank you. It still helps the next crew"}</span>
                 </span>
-                <span className="tnum display text-[22px] font-bold text-sea">+<NumberTicker value={EARN.share} delay={1} className="text-sea" /></span>
+                {earned ? <span className="tnum display text-[22px] font-bold text-sea">+<NumberTicker value={EARN.share} delay={1} className="text-sea" /></span> : <I.Check size={22} className="text-sea" />}
               </div>
             </BlurFade>
-            <p className="text-center text-[12px] text-mute">You now have {wallet.balance} credits.</p>
-            <button type="button" onClick={() => setStage("edit")} className="h-10 text-[13px] font-semibold text-signal-ink">Share another</button>
+            <p className="text-center text-[12px] text-mute">{earned ? `You now have ${wallet.balance} credits.` : wallet.share().ok ? "" : wallet.share().why}</p>
+            <button type="button" onClick={() => { setStage("edit"); setRaw(""); setEarned(null) }} className="h-10 text-[13px] font-semibold text-signal-ink">Share another</button>
           </div>
         )}
       </Scroll>
@@ -1260,10 +1363,22 @@ function StoriesScreen({ storyId, setStoryId, rank }: { storyId: number | null; 
   const prog = useProgress()
   const [filter, setFilter] = useState<"all" | "reports" | "channel" | "mine" | "clean" | "negatives">("all")
   const openId = storyId
-  const openUnlocked = openId != null && wallet.isUnlocked(openId)
+  const openUnlocked = openId != null && STORIES.some((x) => x.d.id === openId) && wallet.isUnlocked(openId)
   useEffect(() => {
     if (openId != null && openUnlocked) prog.readStory(openId)
   }, [openId, openUnlocked]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (storyId != null && !STORIES.some((x) => x.d.id === storyId)) {
+    return (
+      <>
+        <TopBar title="Story" onBack={() => setStoryId(null)} />
+        <Scroll className="items-center gap-3 pt-10 text-center">
+          <IconTile icon={I.Newspaper} color="slate" size={56} />
+          <p className="text-[15px] font-semibold">That story isn't here any more.</p>
+          <button type="button" onClick={() => setStoryId(null)} className="h-11 rounded-xl bg-primary px-5 text-[14px] font-semibold text-on-primary">See all stories</button>
+        </Scroll>
+      </>
+    )
+  }
   if (storyId != null) {
     const s = storyById(storyId)
     const unlocked = wallet.isUnlocked(s.d.id)
@@ -1281,6 +1396,7 @@ function StoriesScreen({ storyId, setStoryId, rank }: { storyId: number | null; 
                   Read the full story <CostTag cost={COSTS.story} />
                 </button>
                 <span className="text-[12px] text-mute">Unlocked stories stay yours. You have {wallet.balance} credits.</span>
+                <button type="button" onClick={() => wallet.openPlans({ reason: "Every inspection story is included with Watchkeeper, Command and the Voyage pass.", select: "watch" })} className="text-[12.5px] font-semibold text-primary">Or read them all with a plan →</button>
               </div>
             }
           />
@@ -1305,94 +1421,21 @@ function StoriesScreen({ storyId, setStoryId, rank }: { storyId: number | null; 
         ))}
       </div>
       <Scroll className="gap-2.5">
-        <p className="text-[13px] leading-snug text-mute">{REPORT_STORIES.length} inspection reports with the attending superintendent's notes, and {CHANNEL_STORIES.length} crew debriefs from the SIRE 2.0 channel. Previews are free; a full story is {COSTS.story} credits, stays unlocked and earns 20 XP.</p>
+        <p className="text-[13px] leading-snug text-mute">{REPORT_STORIES.length} inspection reports with the attending superintendent's notes, and {CHANNEL_STORIES.length} crew debriefs from the SIRE 2.0 channel. {wallet.perks.allStories ? "Every story is included in your plan." : `Previews are free, three stories are always free, and one more is free each week. Any other story is ${COSTS.story} credits and stays yours.`} The first read of each earns 20 XP.</p>
+        {!wallet.perks.allStories && (
+          <button type="button" onClick={() => setStoryId(storyOfTheWeek())} className="flex items-center gap-3 rounded-2xl border border-[#ffd2b0] bg-[#fff6ee]/85 px-3.5 py-3 text-left">
+            <IconTile icon={I.Gift} color="orange" size={34} />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-[12px] font-semibold text-[#c2410c]">Free this week</span>
+              <span className="truncate text-[13.5px] font-bold">{storyById(storyOfTheWeek()).headline}</span>
+            </span>
+            <I.ArrowRight size={16} className="text-mute" />
+          </button>
+        )}
         {list.map((s) => (
           <StoryCard key={s.d.id} s={s} locked={!wallet.isUnlocked(s.d.id)} onClick={() => setStoryId(s.d.id)} />
         ))}
         {!list.length && <p className="pt-6 text-center text-[13px] text-mute">No stories match yet.</p>}
-      </Scroll>
-    </>
-  )
-}
-
-/* ---------------- Wallet ---------------- */
-function WalletScreen({ go }: { go: (s: Screen) => void }) {
-  const wallet = useWallet()
-  const fmt = (iso: string) => {
-    const d = new Date(iso)
-    return `${d.getDate()} ${MON[d.getMonth()]} · ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
-  }
-  return (
-    <>
-      <TopBar title="Credits" />
-      <Scroll>
-        <div className="flex flex-col gap-4 rounded-[20px] bg-hero p-5 text-hero-ink">
-          <span className="font-mono text-[11.5px] tracking-[0.1em] text-hero-muted uppercase">Balance</span>
-          <span className="flex items-end gap-2">
-            <span className="tnum display text-[44px] leading-none font-bold"><NumberTicker key={wallet.flash} value={wallet.balance} className="text-hero-ink" /></span>
-            <span className="pb-1 text-[14px] text-hero-muted">credits</span>
-          </span>
-          <button type="button" onClick={() => wallet.openTopUp()} className="h-12 rounded-xl bg-hero-accent text-[15px] font-semibold text-[#1a0a00]">Get more credits</button>
-        </div>
-
-        <Section title="What things cost">
-          <div className="grid grid-cols-3 gap-2">
-            {([["Brief", COSTS.brief, I.Clipboard, "setup"], ["Interview", COSTS.interview, I.Mic, "practice"], ["Story", COSTS.story, I.Newspaper, "stories"]] as const).map(([l, c, Icon, t]) => (
-              <button key={l} type="button" onClick={() => go(t as Screen)} className="flex flex-col gap-1.5 rounded-2xl border border-line bg-surface p-3 text-left hover:border-mute">
-                <Icon size={18} />
-                <span className="text-[13px] font-semibold">{l}</span>
-                <CostTag cost={c} className="text-mute" />
-              </button>
-            ))}
-          </div>
-          <p className="text-[12.5px] leading-snug text-mute">Free: daily drill, question bank, story previews.</p>
-        </Section>
-
-        <button type="button" onClick={() => go("share")} className="flex items-center gap-3.5 rounded-2xl border border-dashed border-line p-4 text-left">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-sea-soft text-sea"><I.Plus size={20} /></span>
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="text-[15px] font-bold">Earn {EARN.share} credits</span>
-            <span className="text-[12.5px] text-mute">Share an anonymous debrief after your next inspection</span>
-          </span>
-          <I.ArrowRight size={17} className="text-mute" />
-        </button>
-
-        <Section title="Packs" aside="prototype prices">
-          <div className="flex flex-col gap-2">
-            {PACKS.map((pk) => (
-              <button key={pk.id} type="button" onClick={() => wallet.openTopUp(undefined, pk.id)} className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5 text-left hover:border-mute">
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="flex items-center gap-2 text-[15px] font-bold">
-                    {pk.name}
-                    {pk.popular && <span className="rounded-full bg-signal-soft px-2 py-0.5 font-mono text-[10px] font-semibold text-signal-ink">POPULAR</span>}
-                  </span>
-                  <span className="text-[12.5px] text-mute">{pk.note}</span>
-                </span>
-                <span className="flex flex-col items-end">
-                  <span className="tnum text-[15px] font-bold">{inr(pk.price)}</span>
-                  <span className="tnum font-mono text-[11.5px] text-mute">{pk.credits.toLocaleString("en-IN")} cr</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </Section>
-
-        <Section title="History" aside={`${wallet.ledger.length} entries`}>
-          <ol className="flex flex-col divide-y divide-line rounded-2xl border border-line bg-surface">
-            {wallet.ledger.map((e) => (
-              <li key={e.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-[13.5px] font-medium">{e.label}</span>
-                  <span className="font-mono text-[11px] text-mute">{fmt(e.at)}</span>
-                </span>
-                <span className={cn("tnum shrink-0 font-mono text-[13.5px] font-semibold", e.delta > 0 ? "text-sea" : "text-ink")}>{e.delta > 0 ? `+${e.delta}` : e.delta}</span>
-              </li>
-            ))}
-          </ol>
-        </Section>
-        <button type="button" onClick={() => wallet.reset()} className="h-10 self-center text-[12.5px] font-medium text-mute underline-offset-2 hover:underline">
-          Reset demo wallet to {WELCOME_CREDITS} credits
-        </button>
       </Scroll>
     </>
   )

@@ -320,3 +320,18 @@
     radial-gradient(320px 280px at 100% 100%, rgba(255, 212, 184, 0.45), transparent 70%),
     var(--bg);
 }
+
+/* Night-watch on the page itself (set by the app), so sheets and toasts outside the app frame match */
+body.night-watch { background: var(--bg); }
+body.night-watch .aurora { display: none; }
+/* Sheets and dialogs need a solid panel: the glass surface lets the page show through */
+.sheet-panel { background: #f7faff; }
+.night-watch .sheet-panel { background: var(--surface); }
+/* Night-watch: keep buttons readable and drop the blue and purple accents */
+.night-watch .bg-hero-accent { color: #000000 !important; }
+.night-watch [class*="from-[#7b5cff]"], .night-watch [class*="from-[#2a3f63]"], .night-watch [class*="from-[#ffcf5a]"] { background: var(--surface-2) !important; color: var(--ink) !important; box-shadow: none !important; }
+.night-watch [class*="text-[#7b5cff]"], .night-watch [class*="text-[#5a3bd1]"], .night-watch [class*="text-[#c2410c]"], .night-watch [class*="text-[#7a2e05]"], .night-watch [class*="text-[#2a78d6]"] { color: var(--ink) !important; }
+.night-watch [class*="bg-[#f7f4ff]"], .night-watch [class*="bg-[#f4f0ff]"], .night-watch [class*="bg-[#fff6ee]"], .night-watch [class*="bg-[#fff1e5]"], .night-watch [class*="bg-[#5a3bd1]"] { background: var(--surface-2) !important; color: var(--ink) !important; }
+.night-watch [class*="border-[#d9cffd]"], .night-watch [class*="border-[#ffd2b0]"] { border-color: var(--line) !important; }
+.night-watch .wallet-bar span { background: var(--ink) !important; }
+.night-watch .wallet-bar span:nth-child(2n) { opacity: 0.55; }

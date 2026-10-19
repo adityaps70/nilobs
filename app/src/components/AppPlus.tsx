@@ -7,12 +7,12 @@ import * as I from "@/components/icons"
 import { cn } from "@/lib/utils"
 import { Chip, Scroll, TopBar } from "@/components/ui"
 import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components/topicIcons"
-import { CostTag, CreditPill } from "@/credits"
-import { BADGES, CHEST, MISSIONS, dayKey, pop, useProgress } from "@/progress"
+import { COSTS, CostTag, CreditPill, EARN, useWallet } from "@/credits"
+import { AI_XP_CAP, BADGES, CHEST, LEVELS, MISSIONS, XP, dayKey, pop, streakMultiplier, useProgress } from "@/progress"
 import {
   BENCH, CHAPTER_NAMES, DECKS, KIT, OBS, TYPE_COLOR, TYPE_HINT, TYPE_KEYS, TYPE_NAME, cardsFor, countBy, deckById, type DeckId, type Obs,
 } from "@/fleet"
-import { RANK_NAMES, RANK_TOPICS, type Topic } from "@/data"
+import { RANKS, RANK_NAMES, RANK_TOPICS, SHIP_TYPES, type Topic } from "@/data"
 import type { AppScreen } from "@/nav"
 import { STORIES } from "@/stories"
 import { AiChip, ExplainObs } from "@/components/AiFeatures"
@@ -55,18 +55,22 @@ export function LevelRing({ size = 44, stroke = 4, dark }: { size?: number; stro
 
 export function StreakPill({ className, onClick }: { className?: string; onClick?: () => void }) {
   const p = useProgress()
-  const live = p.streak.last === dayKey()
+  const live = p.live.state === "done"
+  const n = p.live.n
+  const hint = p.live.state === "due" ? ". Do one activity today to keep it" : p.live.state === "freeze" ? ". You missed yesterday; a freeze will save it if you train today" : p.live.state === "lost" ? ". Start a new streak today" : ""
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={`${p.streak.n}-day streak${live ? "" : ". Do one activity today to keep it"}`}
+      title={`${n}-day streak${hint}`}
+      aria-label={`${n}-day streak${hint}`}
       className={cn("tnum flex h-10 shrink-0 items-center gap-1 rounded-full border px-3 font-mono text-[13px] font-semibold", live ? "border-[#ffd2b0] bg-[#fff1e5]/80 text-[#c2410c]" : "border-line bg-surface text-mute", className)}
     >
       <motion.span animate={live ? { scale: [1, 1.18, 1] } : {}} transition={{ repeat: Infinity, duration: 2.4 }} className="flex">
         <I.Flame size={17} className={live ? "fill-[#ffb547]" : ""} />
       </motion.span>
-      {p.streak.n}
+      {n}
+      {p.live.state === "freeze" && <I.Snow size={13} className="text-[#2a78d6]" />}
     </button>
   )
 }
@@ -168,13 +172,13 @@ export function ObsOfTheDay({ onMore }: { onMore: () => void }) {
     const n = Number(dayKey().replace(/-/g, ""))
     return pool[n % pool.length]
   }, [])
-  const [pick, setPick] = useState<string | null>(null)
+  const pick = p.ood.day === dayKey() ? p.ood.pick : null
   const right = pick === o.y
   return (
     <section className="flex flex-col gap-3 rounded-[22px] border border-line bg-surface p-4">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 text-[12.5px] font-semibold text-signal-ink"><IconTile icon={I.Target} color="orange" size={26} /> Observation of the day</span>
-        <span className="font-mono text-[11px] text-mute">Chapter {o.c} · {SRC_LABEL[o.s]}</span>
+        <span className="font-mono text-[11px] text-mute">Chapter {o.c}{o.q ? ` · Q ${o.q}` : ""} · {SRC_LABEL[o.s]}</span>
       </div>
       <p className="text-[15px] leading-snug font-medium">“{o.t}”</p>
       <span className="text-[12.5px] font-semibold text-mute">Human, process or hardware?</span>
@@ -184,7 +188,7 @@ export function ObsOfTheDay({ onMore }: { onMore: () => void }) {
             key={k}
             type="button"
             disabled={!!pick}
-            onClick={() => { setPick(k); p.answerSpot(k === o.y, k === o.y ? 1 : 0) }}
+            onClick={() => p.answerOod(k, k === o.y, o.p)}
             className={cn(
               "flex h-11 items-center justify-center gap-1.5 rounded-xl border text-[13px] font-semibold transition-colors",
               !pick ? "border-line bg-surface hover:border-mute" : k === o.y ? "border-sea bg-sea-soft text-sea" : pick === k ? "border-signal bg-signal-soft text-signal-ink" : "border-line bg-surface opacity-50"
@@ -198,7 +202,7 @@ export function ObsOfTheDay({ onMore }: { onMore: () => void }) {
       <AnimatePresence>
         {pick && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="flex flex-col gap-2 overflow-hidden">
-            <span className={cn("text-[13.5px] font-bold", right ? "text-sea" : "text-signal-ink")}>{right ? "Correct. +17 XP" : `It was ${TYPE_NAME[o.y]}. +5 XP for trying`}</span>
+            <span className={cn("text-[13.5px] font-bold", right ? "text-sea" : "text-signal-ink")}>{right ? `Correct. +${XP.spotRight + XP.combo} XP` : `It was ${TYPE_NAME[o.y]}. +${XP.spotWrong} XP for trying`}</span>
             <span className="flex gap-2 rounded-xl bg-sea-soft px-3 py-2.5 text-[13px] leading-snug"><I.Lightbulb size={16} className="mt-px shrink-0 text-sea" />{o.f}</span>
             <button type="button" onClick={onMore} className="self-start text-[13px] font-semibold text-primary">Play Spot the observation →</button>
           </motion.div>
@@ -215,12 +219,12 @@ const DECK_ICON: Record<DeckId, Ico> = { trending: I.TrendUp, ratings: I.Users, 
 
 export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppScreen) => void; openDeck: (d: DeckId) => void }) {
   const p = useProgress()
+  const w = useWallet()
   const mine = cardsFor("trending", rank)
   const due = p.dueCount("trending", rank)
   const fresh = mine.filter((c) => !p.srs[c.i]).length
-  const start = (d: DeckId) => {
-    if (p.unlockDeck(d)) openDeck(d)
-  }
+  // a locked deck opens its unlock screen, so credits are never spent on a single tap
+  const start = (d: DeckId) => openDeck(d)
   return (
     <>
       <TopBar title="Train" right={<CreditPill className="h-9" />} />
@@ -230,7 +234,7 @@ export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppS
             <div className="flex flex-col gap-1">
               <span className="text-[12px] font-semibold tracking-[0.06em] text-white/60 uppercase">Today's 10 · {RANK_NAMES[rank] || rank}</span>
               <span className="display text-[24px] leading-tight font-bold text-white">{due ? `${due} cards due for review` : "Fresh cards ready"}</span>
-              <span className="text-[13.5px] leading-snug text-white/70">Cards you miss come back tomorrow. Cards you know come back later and later.</span>
+              <span className="text-[13.5px] leading-snug text-white/70">Cards you miss come back tomorrow. Cards you know come back later and later. +{XP.cardKnew} XP a card{p.multiplier > 1 ? `, ×${p.multiplier} for your streak` : ""}.</span>
             </div>
             <IconTile icon={I.Brain} color="violet" size={48} />
           </div>
@@ -271,7 +275,7 @@ export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppS
                 <span className="flex items-start justify-between gap-2">
                   <IconTile icon={DECK_ICON[d.id]} color={d.color as TileColor} size={42} />
                   {open ? (
-                    dd ? <span className="rounded-full bg-signal-soft px-2 py-0.5 font-mono text-[11px] font-semibold text-signal-ink">{dd} due</span> : <span className="rounded-full bg-sea-soft px-2 py-0.5 text-[11px] font-semibold text-sea">{d.cost ? "Unlocked" : "Free"}</span>
+                    dd ? <span className="rounded-full bg-signal-soft px-2 py-0.5 font-mono text-[11px] font-semibold text-signal-ink">{dd} due</span> : <span className="rounded-full bg-sea-soft px-2 py-0.5 text-[11px] font-semibold text-sea">{!d.cost ? "Free" : w.perks.allDecks ? "Included" : "Unlocked"}</span>
                   ) : (
                     <span className="flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-mute"><I.Lock size={12} /><CostTag cost={d.cost} /></span>
                   )}
@@ -293,9 +297,9 @@ export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppS
           <IconTile icon={I.Mic} color="indigo" size={44} />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex items-center gap-2 text-[15px] font-bold">AI inspector <AiChip /></span>
-            <span className="text-[12.5px] text-mute">Five real questions, graded on fact, procedure and record, with follow-ups</span>
+            <span className="text-[12.5px] text-mute">Five real questions, graded on fact, procedure and record, with follow-ups. Voice mode available</span>
           </span>
-          <CostTag cost={20} className="text-mute" />
+          <CostTag cost={COSTS.interview} className="text-mute" />
         </button>
         <p className="text-center text-[11.5px] leading-snug text-mute">Answers come from officers' and superintendents' notes. Check them against your SMS and the current rules.</p>
       </Scroll>
@@ -308,41 +312,70 @@ export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppS
    ===================================================================== */
 export function SessionScreen({ deck, rank, go }: { deck: DeckId; rank: string; go: (s: AppScreen) => void }) {
   const p = useProgress()
-  const [cards, setCards] = useState(() => p.session(deck, rank, 10))
+  const w = useWallet()
+  const d = deckById(deck)
+  const [batch, setBatch] = useState(() => p.session(deck, rank, 10))
+  const cards = batch.cards
   const [i, setI] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [got, setGot] = useState<boolean[]>([])
+  const [earned, setEarned] = useState(0)
   const [float, setFloat] = useState<{ id: number; t: string } | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
-  const xp0 = useRef(p.xp)
+  const unlockedAt = useRef(0)
   const finished = i >= cards.length
-  const d = deckById(deck)
+  const owned = p.hasDeck(deck)
+  const flip = () => {
+    if (Date.now() - unlockedAt.current < 600) return // the second tap of a double tap on "Unlock"
+    setFlipped((f) => !f)
+  }
 
   const answer = (ok: boolean) => {
     const c = cards[i]
-    if (!c) return
-    p.reviewCard(c.i, ok)
-    setFloat({ id: Date.now(), t: ok ? "+10 XP" : "+4 XP" })
+    if (!c || !owned) return
+    const xp = p.reviewCard(c.i, ok)
+    setEarned((e) => e + xp)
+    setFloat({ id: Date.now(), t: `+${xp} XP` })
     setGot((g) => [...g, ok])
     setFlipped(false)
     setI((v) => v + 1)
   }
   useEffect(() => {
-    if (!finished) return
+    if (!finished || !owned) return
     p.finishSession()
     const t = setTimeout(() => pop(endRef.current, true), 200)
     return () => clearTimeout(t)
   }, [finished]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (finished || (e.target as HTMLElement)?.tagName === "TEXTAREA") return
-      if (e.key === " ") { e.preventDefault(); setFlipped((f) => !f) }
+      const tag = (e.target as HTMLElement)?.tagName
+      if (finished || !owned || tag === "TEXTAREA" || tag === "INPUT") return
+      if (e.key === " ") {
+        e.preventDefault()
+        setFlipped((f) => !f)
+      }
       if (e.key === "ArrowRight" && flipped) answer(true)
       if (e.key === "ArrowLeft" && flipped) answer(false)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   })
+
+  if (!owned)
+    return (
+      <>
+        <TopBar title={d.name} onBack={() => go("train")} />
+        <Scroll className="items-center gap-4 pt-6 text-center">
+          <IconTile icon={DECK_ICON[deck]} color={d.color as TileColor} size={84} />
+          <h3 className="display text-[26px] leading-tight font-bold">{d.name}</h3>
+          <p className="max-w-[36ch] text-[14.5px] leading-snug text-mute">{d.sub}. {cardsFor(deck, rank).length} cards with spaced repetition. Unlock it once and keep it, or get every specialist deck with a plan.</p>
+          <button type="button" onClick={() => { if (p.unlockDeck(deck)) { unlockedAt.current = Date.now(); setBatch(p.session(deck, rank, 10)) } }} className="flex h-12 w-full max-w-[360px] items-center justify-between rounded-2xl bg-primary px-5 text-[15px] font-semibold text-on-primary">
+            Unlock this deck <CostTag cost={d.cost} />
+          </button>
+          <button type="button" onClick={() => w.openPlans({ reason: "Every specialist deck is included with Watchkeeper and Command.", select: "watch" })} className="text-[13.5px] font-semibold text-primary">See plans that include it →</button>
+        </Scroll>
+      </>
+    )
 
   if (finished) {
     const n = got.filter(Boolean).length
@@ -352,9 +385,11 @@ export function SessionScreen({ deck, rank, go }: { deck: DeckId; rank: string; 
         <Scroll className="items-center gap-4 pt-4 text-center">
           <div ref={endRef}><IconTile icon={I.Trophy} color="amber" size={84} /></div>
           <h3 className="display text-[28px] leading-tight font-bold">Session done</h3>
-          <p className="max-w-[32ch] text-[14.5px] leading-snug text-mute">You knew {n} of {cards.length}. The ones you missed come back first tomorrow.</p>
+          <p className="max-w-[34ch] text-[14.5px] leading-snug text-mute">
+            You knew {n} of {cards.length}.{n < cards.length ? " The ones you missed come back first tomorrow." : batch.extra ? " Extra practice keeps them fresh." : " Each one comes back later, when it's due."}
+          </p>
           <div className="grid w-full grid-cols-3 gap-2">
-            {[["XP earned", `+${p.xp - xp0.current}`], ["Streak", `${p.streak.n} day${p.streak.n === 1 ? "" : "s"}`], ["Cards mission", `${Math.min(10, p.m.cards)}/10`]].map(([l, v]) => (
+            {[["XP this round", `+${earned}`], ["Streak", `${p.live.n} day${p.live.n === 1 ? "" : "s"}`], ["Cards mission", `${Math.min(10, p.m.cards)}/10`]].map(([l, v]) => (
               <span key={l} className="flex flex-col rounded-2xl border border-line bg-surface px-2 py-3">
                 <span className="tnum display text-[20px] font-bold">{v}</span>
                 <span className="text-[11.5px] text-mute">{l}</span>
@@ -371,7 +406,18 @@ export function SessionScreen({ deck, rank, go }: { deck: DeckId; rank: string; 
           </div>
           <div className="grid w-full grid-cols-2 gap-2">
             <button type="button" onClick={() => go("train")} className="h-12 rounded-2xl border border-line bg-surface text-[14.5px] font-semibold">Back to Train</button>
-            <button type="button" onClick={() => { setCards(p.session(deck, rank, 10)); setI(0); setGot([]) }} className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-primary text-[14.5px] font-semibold text-on-primary"><I.Play size={15} /> Another 10</button>
+            <button
+              type="button"
+              onClick={() => {
+                setBatch(p.session(deck, rank, 10))
+                setI(0)
+                setGot([])
+                setEarned(0)
+              }}
+              className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-primary text-[14.5px] font-semibold text-on-primary"
+            >
+              <I.Play size={15} /> Another 10
+            </button>
           </div>
         </Scroll>
       </>
@@ -382,13 +428,14 @@ export function SessionScreen({ deck, rank, go }: { deck: DeckId; rank: string; 
     <>
       <TopBar title={d.name} onBack={() => go("train")} right={<StreakPill className="h-9" />} />
       <div className="no-scrollbar relative flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5">
+        {batch.extra && i === 0 && !flipped && <p className="rounded-xl bg-surface-2 px-3 py-2 text-[12.5px] leading-snug text-mute">Nothing is due in this deck today, so this is extra practice: +{XP.cardExtra} XP a card, and it won't change when cards come back.</p>}
         <div className="flex items-center gap-3">
           <span className="flex flex-1 gap-1" aria-label={`Card ${i + 1} of ${cards.length}`}>
             {cards.map((_, j) => <span key={j} className={cn("h-1.5 flex-1 rounded-full transition-colors", j < i ? (got[j] ? "bg-sea" : "bg-signal") : j === i ? "bg-primary" : "bg-surface-2")} />)}
           </span>
           <span className="tnum font-mono text-[12px] font-semibold">{i + 1}/{cards.length}</span>
         </div>
-        <button type="button" onClick={() => setFlipped((f) => !f)} aria-label={flipped ? "Show the question" : "Show the answer"} className="relative h-[clamp(320px,54vh,450px)] shrink-0 [perspective:1400px]">
+        <button type="button" onClick={flip} aria-label={flipped ? "Show the question" : "Show the answer"} className="relative h-[clamp(320px,54vh,450px)] shrink-0 [perspective:1400px]">
           <motion.div key={c.i} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0, rotateY: flipped ? 180 : 0 }} transition={{ duration: 0.5, ease: [0.2, 0.7, 0.2, 1] }} className="relative size-full [transform-style:preserve-3d]">
             <div className="glass absolute inset-0 flex flex-col gap-4 rounded-[28px] p-6 text-left [backface-visibility:hidden]">
               <span className="flex items-center justify-between gap-2">
@@ -396,7 +443,7 @@ export function SessionScreen({ deck, rank, go }: { deck: DeckId; rank: string; 
                 <span className="flex gap-0.5" aria-label={`Difficulty ${c.l} of 3`}>{[1, 2, 3].map((l) => <I.Star key={l} size={13} className={l <= c.l ? "fill-[#ffb547] text-[#f08a12]" : "text-line"} />)}</span>
               </span>
               <span className="display my-auto text-[clamp(1.3rem,4.6vw,1.75rem)] leading-[1.2] font-bold">{c.q}</span>
-              <span className="flex items-center gap-2 text-[13px] text-mute"><I.Refresh size={15} /> Tap to turn over<span className="hidden sm:inline"> · or press space</span></span>
+              <span className="flex items-center gap-2 text-[13px] text-mute"><I.Refresh size={15} /> Tap to turn over<span className="hidden sm:inline"> · Space flips, ← not yet, → knew it</span></span>
             </div>
             <div className="glass-deep absolute inset-0 flex flex-col gap-3 overflow-y-auto rounded-[28px] p-6 text-left [backface-visibility:hidden] [transform:rotateY(180deg)]">
               <span className="text-[13px] leading-snug text-white/60">{c.q}</span>
@@ -454,6 +501,7 @@ export function SpotGame({ rounds = 8, embedded, onExit }: { rounds?: number; em
   const [best, setBest] = useState(0)
   const [score, setScore] = useState(0)
   const [xp, setXp] = useState(0)
+  const [last, setLast] = useState(0)
   const endRef = useRef<HTMLDivElement>(null)
   const done = i >= game.length
   const r = game[Math.min(i, game.length - 1)]
@@ -469,8 +517,9 @@ export function SpotGame({ rounds = 8, embedded, onExit }: { rounds?: number; em
     setCombo(nc)
     setBest((b) => Math.max(b, nc))
     if (ok) setScore((s) => s + 1)
-    setXp((x) => x + (ok ? 15 + Math.min(nc, 5) * 2 : 5))
-    p.answerSpot(ok, nc)
+    const gained = p.answerSpot(ok, nc, r.o.p)
+    setLast(gained)
+    setXp((x) => x + gained)
   }
   const next = () => {
     setPick(null)
@@ -491,7 +540,7 @@ export function SpotGame({ rounds = 8, embedded, onExit }: { rounds?: number; em
           {pct >= 0.75 ? "You think like an inspector." : pct >= 0.5 ? "Solid. Chapters 5 and 8 catch most people out." : "Every round teaches a fix. Play again and it sticks."}
         </p>
         <div className="grid w-full max-w-[420px] grid-cols-3 gap-2">
-          {[["XP earned", `+${xp}`], ["Best combo", `×${best}`], ["Streak", `${p.streak.n}d`]].map(([l, v]) => (
+          {[["XP earned", `+${xp}`], ["Best combo", `×${best}`], ["Streak", `${p.live.n}d`]].map(([l, v]) => (
             <span key={l} className="flex flex-col rounded-2xl border border-line bg-surface px-2 py-3">
               <span className="tnum display text-[20px] font-bold">{v}</span>
               <span className="text-[11.5px] text-mute">{l}</span>
@@ -564,7 +613,7 @@ export function SpotGame({ rounds = 8, embedded, onExit }: { rounds?: number; em
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-2.5">
             <span className={cn("flex items-center gap-2 text-[14.5px] font-bold", ok ? "text-sea" : "text-signal-ink")}>
               {ok ? <I.Check size={18} /> : <I.Alert size={17} />}
-              {ok ? `Spot on. +${15 + Math.min(combo, 5) * 2} XP` : `Not quite. It was ${r.kind === "chapter" ? `chapter ${r.answer}` : TYPE_NAME[r.answer]}.`}
+              {ok ? `Spot on. +${last} XP` : `Not quite. It was ${r.kind === "chapter" ? `chapter ${r.answer}` : TYPE_NAME[r.answer]}. +${last} XP`}
             </span>
             {r.o.f && <span className="flex gap-2.5 rounded-2xl bg-sea-soft px-3.5 py-3 text-[13.5px] leading-snug"><I.Lightbulb size={17} className="mt-px shrink-0 text-sea" /><span><b className="font-semibold">How to avoid it: </b>{r.o.f}</span></span>}
             <ExplainObs key={i} o={r.o} />
@@ -672,6 +721,7 @@ export function ObsCard({ o }: { o: Obs }) {
         {o.y && <span className="flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5"><span className="size-2 rounded-full" style={{ background: TYPE_COLOR[o.y] }} />{TYPE_NAME[o.y]}</span>}
         <span className="rounded-full bg-surface-2 px-2 py-0.5">{o.p}</span>
         {o.r && <span className="rounded-full bg-surface-2 px-2 py-0.5">{o.r}</span>}
+        {o.q && <span className="rounded-full bg-primary-soft px-2 py-0.5 font-mono text-primary" title="SIRE 2.0 question number">Q {o.q}</span>}
         <span className="ml-auto font-mono font-normal">{o.i === "SIRE 2.0" ? SRC_LABEL[o.s] : o.i}</span>
       </div>
       <p className="text-[14px] leading-snug">{o.t}</p>
@@ -692,7 +742,9 @@ export function RadarScreen({ rank, go }: { rank: string; go: (s: AppScreen) => 
   const base = OBS.filter((o) => (src === "all" || o.i === src) && (!mine || rel.includes(o.p)))
   const ql = q.trim().toLowerCase()
   const list = base.filter((o) => (!ch || o.c === ch) && (!topic || o.p === topic) && (!ql || (o.t + " " + o.f + " " + o.p).toLowerCase().includes(ql)))
-  const topics = countBy(base.filter((o) => !ch || o.c === ch), (o) => o.p).slice(0, 8) as [Topic, number][]
+  const topics0 = countBy(base.filter((o) => !ch || o.c === ch), (o) => o.p).slice(0, 8) as [Topic, number][]
+  // keep the active topic chip visible (so it can always be cleared), even when a chapter filter hides it
+  const topics = topic && !topics0.some(([t]) => t === topic) ? ([[topic, base.filter((o) => (!ch || o.c === ch) && o.p === topic).length], ...topics0] as [Topic, number][]) : topics0
   const n = (i: string) => OBS.filter((o) => o.i === i).length
   return (
     <>
@@ -743,7 +795,7 @@ export function RadarScreen({ rank, go }: { rank: string; go: (s: AppScreen) => 
         <section className="flex flex-col gap-2.5">
           <div className="flex items-baseline justify-between">
             <h3 className="text-[15px] font-bold">{ch ? `Chapter ${ch}: ${CHAPTER_NAMES[ch]}` : "All findings"}</h3>
-            <span className="tnum font-mono text-[11px] text-mute">{list.length} shown of {base.length}</span>
+            <span className="tnum font-mono text-[11px] text-mute">{Math.min(shown, list.length)} of {list.length}{list.length !== base.length ? ` (${base.length} in total)` : ""}</span>
           </div>
           <div className="no-scrollbar -mx-5 flex gap-1.5 overflow-x-auto px-5">
             {topics.map(([t, v]) => (
@@ -760,7 +812,12 @@ export function RadarScreen({ rank, go }: { rank: string; go: (s: AppScreen) => 
           {shown < list.length && (
             <button type="button" onClick={() => setShown((s) => s + 15)} className="h-11 rounded-xl border border-line bg-surface text-[13.5px] font-semibold">Show 15 more</button>
           )}
-          {!list.length && <p className="rounded-2xl border border-dashed border-line p-4 text-center text-[13px] text-mute">No findings match. Clear a filter or try another word.</p>}
+          {!list.length && (
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-line p-4 text-center text-[13px] text-mute">
+              No findings match.
+              <button type="button" onClick={() => { setCh(null); setTopic(null); setQ("") }} className="h-9 rounded-full border border-line bg-surface px-3 text-[12.5px] font-semibold text-ink">Clear all filters</button>
+            </div>
+          )}
         </section>
         <p className="text-center text-[11.5px] leading-snug text-mute">From one fleet's SIRE 2.0, CDI and pre-vetting findings. Ship, crew and company names removed; wording paraphrased.</p>
       </Scroll>
@@ -778,6 +835,18 @@ const KIT_ICON: Record<string, [Ico, TileColor]> = {
 export function KitScreen({ go }: { go: (s: AppScreen) => void }) {
   const p = useProgress()
   const [open, setOpen] = useState<string | null>("drills")
+  const [confirm, setConfirm] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    const text = KIT.map((l) => `${l.title}\n${l.items.map((it) => `${p.kit[it.id] ? "[x]" : "[ ]"} ${it.text}`).join("\n")}`).join("\n\n")
+    try {
+      await navigator.clipboard.writeText(`NilObs ready kit\n\n${text}`)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch {
+      setCopied(false)
+    }
+  }
   const ref = useRef<HTMLDivElement>(null)
   const total = KIT.reduce((n, l) => n + l.items.length, 0)
   const doneAll = KIT.reduce((n, l) => n + l.items.filter((it) => p.kit[it.id]).length, 0)
@@ -839,6 +908,17 @@ export function KitScreen({ go }: { go: (s: AppScreen) => void }) {
             )
           })}
         </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={copy} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-[13.5px] font-semibold">
+            {copied ? <><I.Check size={15} /> Copied</> : <><I.FileText size={15} /> Copy the checklist</>}
+          </button>
+          {confirm ? (
+            <button type="button" onClick={() => { p.resetKit(); setConfirm(false) }} className="h-11 rounded-xl bg-signal text-[13.5px] font-semibold text-white">Yes, untick everything</button>
+          ) : (
+            <button type="button" onClick={() => setConfirm(true)} disabled={!doneAll} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-[13.5px] font-semibold disabled:opacity-50"><I.Refresh size={15} /> Start fresh</button>
+          )}
+        </div>
+        {confirm && <p className="-mt-1 text-center text-[12px] text-mute">Unticks all {doneAll} items for the next inspection. XP you've earned stays.</p>}
         <p className="text-center text-[11.5px] leading-snug text-mute">From a ship manager's pre-inspection notes, generalised. Your own SMS and the current rules come first.</p>
       </Scroll>
     </>
@@ -848,10 +928,17 @@ export function KitScreen({ go }: { go: (s: AppScreen) => void }) {
 /* =====================================================================
    Progress / badges
    ===================================================================== */
-export function MeScreen({ go }: { go: (s: AppScreen) => void }) {
+export function MeScreen({ go, rank, ship, setProfile, night, setNight }: { go: (s: AppScreen) => void; rank: string; ship: string; setProfile: (p: { rank: string; ship: string }) => void; night: boolean; setNight: (v: boolean) => void }) {
   const p = useProgress()
+  const w = useWallet()
+  const [howOpen, setHowOpen] = useState(false)
   const acc = p.stats.cards ? Math.round((p.stats.knew / p.stats.cards) * 100) : 0
   const sacc = p.stats.spot ? Math.round((p.stats.spotRight / p.stats.spot) * 100) : 0
+  const ready = p.readiness(rank)
+  const tested = ready.filter((r) => r.score != null)
+  const overall = tested.length ? Math.round(tested.reduce((n, r) => n + (r.score as number), 0) / tested.length) : null
+  const hist = p.interviews.slice(0, 5)
+  const nextReward = p.level.next ? EARN.level[p.level.n + 1] ?? 0 : 0
   return (
     <>
       <TopBar title="Your progress" onBack={() => go("today")} />
@@ -860,13 +947,13 @@ export function MeScreen({ go }: { go: (s: AppScreen) => void }) {
           <div className="flex items-center gap-4">
             <LevelRing size={78} stroke={6} dark />
             <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-[12px] font-semibold tracking-[0.06em] text-white/60 uppercase">Level {p.level.n}</span>
+              <span className="text-[12px] font-semibold tracking-[0.06em] text-white/60 uppercase">Level {p.level.n} of {LEVELS.length}</span>
               <span className="display text-[24px] leading-tight font-bold text-white">{p.level.name}</span>
-              <span className="tnum text-[13px] text-white/70">{p.xp.toLocaleString("en-IN")} XP{p.level.next ? ` · ${p.level.toNext} to ${p.level.next.name}` : " · top level"}</span>
+              <span className="tnum text-[13px] text-white/70">{p.xp.toLocaleString("en-IN")} XP{p.level.next ? ` · ${p.level.toNext.toLocaleString("en-IN")} to ${p.level.next.name} (+${nextReward} credits)` : " · top level"}</span>
             </span>
           </div>
           <div className="grid grid-cols-3 gap-2">
-            {[["Streak", `${p.streak.n}`, I.Flame], ["Best", `${p.streak.best}`, I.Trophy], ["Freezes", `${p.streak.freezes}`, I.Snow]].map(([l, v, Icon]) => {
+            {[["Streak", `${p.live.n}`, I.Flame], ["Best", `${p.streak.best}`, I.Trophy], ["Freezes", `${p.streak.freezes}/${p.freezeCap}`, I.Snow]].map(([l, v, Icon]) => {
               const Ic = Icon as Ico
               return (
                 <span key={l as string} className="flex flex-col gap-1 rounded-xl bg-white/[0.08] px-3 py-2.5">
@@ -877,8 +964,61 @@ export function MeScreen({ go }: { go: (s: AppScreen) => void }) {
               )
             })}
           </div>
-          <p className="text-[12px] leading-snug text-white/60">Every 7-day streak earns a freeze (max 2). A freeze saves your streak if you miss one day.</p>
+          <p className="text-[12px] leading-snug text-white/65">
+            {p.live.state === "lost" ? "Your streak ended. One activity today starts a new one. " : p.live.state === "freeze" ? "You missed yesterday. Train today and a freeze keeps your streak. " : ""}
+            A 7-day streak earns a freeze and multiplies your XP ×{streakMultiplier(7)}; 30 days makes it ×{streakMultiplier(30)}. Streaks of 7, 30 and 100 days pay {EARN.streak[7]}, {EARN.streak[30]} and {EARN.streak[100]} credits.
+          </p>
+          {p.streak.freezes < p.freezeCap && (
+            <button type="button" onClick={() => p.buyFreeze()} className="flex h-10 items-center justify-center gap-2 rounded-xl bg-white/[0.12] text-[13px] font-semibold text-white hover:bg-white/[0.18]">
+              <I.Snow size={15} /> Buy a streak freeze <CostTag cost={COSTS.freeze} className="text-white/80" />
+            </button>
+          )}
         </section>
+
+        <section className="glass flex flex-col gap-3 rounded-[22px] p-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="text-[15px] font-bold">Readiness by topic</h3>
+            <span className="text-[11.5px] text-mute">{overall != null ? `Overall ${overall}%` : "From your cards, Spot answers and interviews"}</span>
+          </div>
+          <ul className="flex flex-col gap-2">
+            {ready
+              .slice()
+              .sort((a, b) => (a.score ?? 101) - (b.score ?? 101))
+              .map((r) => (
+                <li key={r.topic} className="flex items-center gap-2.5">
+                  <TopicBadge topic={r.topic} size={28} />
+                  <span className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="flex items-baseline justify-between gap-2 text-[13px]">
+                      <span className="truncate font-semibold">{r.topic}</span>
+                      <span className="tnum shrink-0 font-mono text-[11.5px] text-mute">{r.score != null ? `${r.score}%` : "not tested yet"}</span>
+                    </span>
+                    <span className="h-1.5 rounded-full bg-surface-2">
+                      {r.score != null && <span className="block h-1.5 rounded-full" style={{ width: `${Math.max(4, r.score)}%`, background: r.score >= 75 ? "var(--sea)" : r.score >= 50 ? "#e08a00" : "var(--signal)" }} />}
+                    </span>
+                  </span>
+                </li>
+              ))}
+          </ul>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => go("session")} className="h-10 rounded-xl border border-line bg-surface text-[13px] font-semibold">Practise cards</button>
+            <button type="button" onClick={() => go("practice")} className="h-10 rounded-xl bg-primary text-[13px] font-semibold text-on-primary">Rehearse with AI</button>
+          </div>
+        </section>
+
+        {hist.length > 0 && (
+          <section className="flex flex-col gap-2.5 rounded-[22px] border border-line bg-surface p-4">
+            <h3 className="text-[15px] font-bold">AI inspector history</h3>
+            {hist.map((r) => (
+              <div key={r.at} className="flex items-center gap-3 text-[13px]">
+                <span className={cn("tnum flex size-9 shrink-0 items-center justify-center rounded-full font-mono text-[12px] font-bold", r.avg >= 8 ? "bg-sea-soft text-sea" : r.avg >= 5 ? "bg-amber-soft text-amber-ink" : "bg-signal-soft text-signal-ink")}>{r.avg}</span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="font-semibold">{new Date(r.at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {RANK_NAMES[r.rank] || r.rank} · {r.n} answers{r.voice ? " · voice" : ""}</span>
+                  <span className="truncate text-[12px] text-mute">{[...new Set(r.items.map((x) => x[0]))].slice(0, 3).join(", ")}</span>
+                </span>
+              </div>
+            ))}
+          </section>
+        )}
 
         <section className="flex flex-col gap-2.5 rounded-[22px] border border-line bg-surface p-4">
           <h3 className="text-[15px] font-bold">Your activity</h3>
@@ -886,7 +1026,7 @@ export function MeScreen({ go }: { go: (s: AppScreen) => void }) {
         </section>
 
         <div className="grid grid-cols-2 gap-2.5">
-          {[["Cards reviewed", p.stats.cards, `${acc}% known`, I.Layers, "blue"], ["Spot answers", p.stats.spot, `${sacc}% right`, I.Target, "orange"], ["Stories read", p.stats.stories, `of ${STORIES.length}`, I.Newspaper, "violet"], ["Best combo", p.stats.bestCombo, "in a row", I.Zap, "amber"]].map(([l, v, s, Icon, c]) => (
+          {[["Cards reviewed", p.stats.cards, `${acc}% known`, I.Layers, "blue"], ["Spot answers", p.stats.spot, `${sacc}% right`, I.Target, "orange"], ["Stories read", p.stats.stories, `of ${STORIES.length}`, I.Newspaper, "violet"], ["Interviews", p.stats.interviews, "with the AI inspector", I.Mic, "indigo"]].map(([l, v, s, Icon, c]) => (
             <span key={l as string} className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3">
               <IconTile icon={Icon as Ico} color={c as TileColor} size={38} />
               <span className="flex flex-col">
@@ -900,7 +1040,7 @@ export function MeScreen({ go }: { go: (s: AppScreen) => void }) {
         <section className="flex flex-col gap-2.5">
           <div className="flex items-baseline justify-between">
             <h3 className="text-[15px] font-bold">Badges</h3>
-            <span className="tnum font-mono text-[11px] text-mute">{Object.keys(p.badges).length} of {BADGES.length}</span>
+            <span className="tnum font-mono text-[11px] text-mute">{Object.keys(p.badges).length} of {BADGES.length} · +{EARN.badge} credits each</span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {BADGES.map((b) => {
@@ -916,6 +1056,68 @@ export function MeScreen({ go }: { go: (s: AppScreen) => void }) {
               )
             })}
           </div>
+        </section>
+
+        <section className="flex flex-col rounded-[22px] border border-line bg-surface">
+          <button type="button" aria-expanded={howOpen} onClick={() => setHowOpen((v) => !v)} className="flex items-center justify-between gap-2 p-4 text-left">
+            <span className="flex flex-col">
+              <span className="text-[15px] font-bold">How XP and credits work</span>
+              <span className="text-[12.5px] text-mute">XP is your rank and never goes down. Credits are what you spend.</span>
+            </span>
+            <I.ChevronDown size={18} className={cn("shrink-0 text-mute transition-transform", howOpen && "rotate-180")} />
+          </button>
+          {howOpen && (
+            <div className="flex flex-col gap-3 border-t border-line p-4 text-[13px] leading-snug">
+              <ul className="grid gap-1.5 sm:grid-cols-2">
+                {[
+                  [`+${XP.cardKnew}`, "a due or new card you knew"],
+                  [`+${XP.cardAgain}`, "a due card you're still learning"],
+                  [`+${XP.cardExtra}`, "extra practice on a card that isn't due"],
+                  [`+${XP.spotRight}–${XP.spotRight + 5 * XP.combo}`, "a right answer in Spot (more for a streak of right answers)"],
+                  [`+${XP.story}`, "the first time you read a story"],
+                  [`+2–${10 * XP.interviewPerPoint}`, "an AI inspector answer (score × 3)"],
+                  [`+${XP.ask}`, `an AI answer or close-out (up to ${AI_XP_CAP} a day)`],
+                  [`+${XP.mission} / +${XP.chest}`, "each daily mission / the chest"],
+                ].map(([v, l]) => (
+                  <li key={l} className="flex gap-2"><span className="tnum w-16 shrink-0 font-mono font-semibold text-primary">{v}</span>{l}</li>
+                ))}
+              </ul>
+              <div className="flex flex-col gap-1">
+                <span className="font-semibold">Levels and their credit rewards</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {LEVELS.slice(1).map((l) => (
+                    <span key={l.n} className={cn("rounded-full border px-2 py-0.5 text-[11.5px]", p.level.n >= l.n ? "border-sea/50 bg-sea-soft text-sea" : "border-line text-mute")}>
+                      {l.n}. {l.name} · {l.xp.toLocaleString("en-IN")} XP · +{EARN.level[l.n]}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="flex flex-col gap-3 rounded-[22px] border border-line bg-surface p-4">
+          <h3 className="flex items-center gap-2 text-[15px] font-bold"><I.Settings size={17} /> Settings</h3>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[12.5px] font-semibold text-mute">Your rank</span>
+            <div className="flex flex-wrap gap-1.5">
+              {RANKS.map((r) => <Chip key={r} size="sm" on={rank === r} onClick={() => setProfile({ rank: r, ship })}>{RANK_NAMES[r] || r}</Chip>)}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[12.5px] font-semibold text-mute">Ship type</span>
+            <div className="flex flex-wrap gap-1.5">
+              {SHIP_TYPES.map((s) => <Chip key={s} size="sm" on={ship === s} onClick={() => setProfile({ rank, ship: s })}>{s} tanker</Chip>)}
+            </div>
+          </div>
+          <button type="button" aria-pressed={night} onClick={() => setNight(!night)} className={cn("flex h-11 items-center justify-between rounded-xl border px-3 text-[13.5px] font-semibold", night ? "border-signal bg-signal-soft text-signal" : "border-line")}>
+            <span className="flex items-center gap-2"><I.Moon size={16} /> Night-watch mode</span>
+            <span className="text-[12px] font-normal">{night ? "On" : "Off"}</span>
+          </button>
+          <button type="button" onClick={() => go("wallet")} className="flex h-11 items-center justify-between rounded-xl border border-line px-3 text-[13.5px] font-semibold">
+            <span className="flex items-center gap-2"><I.Wallet size={16} /> Plans & credits</span>
+            <span className="text-[12px] font-normal text-mute">{w.plan.name} · {w.balance} credits</span>
+          </button>
         </section>
         <button type="button" onClick={() => go("session")} className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-primary text-[15px] font-semibold text-on-primary"><I.Play size={16} /> Earn XP: start 10 cards</button>
       </Scroll>

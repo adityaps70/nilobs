@@ -45,7 +45,7 @@ export function TopBar({ title, onBack, right }: { title: string; onBack?: () =>
       ) : (
         <span />
       )}
-      <span className="text-center text-[16px] font-bold">{title}</span>
+      <h1 className="truncate text-center text-[16px] font-bold">{title}</h1>
       <span className="flex items-center justify-end">{right}</span>
     </header>
   )

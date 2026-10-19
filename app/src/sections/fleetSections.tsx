@@ -9,6 +9,7 @@ import { IconTile, type TileColor } from "@/components/topicIcons"
 import { BENCH, CARDS, CHAPTER_NAMES, DECKS, KIT_TOTAL, OBS, cardsFor } from "@/fleet"
 import { BADGES, LEVELS, useProgress } from "@/progress"
 import { useNav } from "@/nav"
+import { COSTS } from "@/credits"
 import { HOSTED } from "@/ai"
 import { cn } from "@/lib/utils"
 import { SectionHead } from "./top"
@@ -139,7 +140,7 @@ export function HabitSection() {
                         <span className="text-[12.5px] leading-snug text-mute">{d.sub}</span>
                       </span>
                       <span className="tnum font-mono text-[12px] text-mute">{CARDS.filter((c) => c.d === d.id).length}</span>
-                      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", d.cost ? "bg-surface-2 text-mute" : "bg-sea-soft text-sea")}>{d.cost ? `${d.cost} credits` : "Free"}</span>
+                      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", d.cost ? "bg-surface-2 text-mute" : "bg-sea-soft text-sea")}>{d.cost ? `${d.cost} credits or in plans` : "Free"}</span>
                     </button>
                   </li>
                 ))}
@@ -188,10 +189,10 @@ export function AiSection() {
   const { openApp } = useNav()
   const [q, setQ] = useState("")
   const feats = [
-    { icon: I.Mic, c: "violet", t: "AI inspector", s: "Five real questions for your rank. Every answer is graded on the fact, the procedure and the record, then the inspector asks a follow-up.", tag: "20 credits" },
-    { icon: I.Sparkle, c: "indigo", t: "Ask NilObs", s: `Ask anything. Answers draw on ${OBS.length} real observations and ${CARDS.length} Q&As, and show the records they came from.`, tag: "3 free a day" },
-    { icon: I.FileCheck, c: "teal", t: "Close-out drafts", s: "On any observation: why it was raised, the likely root cause, the fix on board, and a close-out response you can copy.", tag: "3 free a day" },
-    { icon: I.Calendar, c: "amber", t: "Day-by-day plan", s: "Turn your inspection brief into a short daily plan up to the day, built around your oil major, port and rank.", tag: "With the brief" },
+    { icon: I.Mic, c: "violet", t: "AI inspector", s: "Five real questions for your rank, typed or spoken. In a voice interview the inspector reads each question aloud and you answer out loud. Every answer is graded on the fact, the procedure and the record.", tag: `${COSTS.interview} credits` },
+    { icon: I.Sparkle, c: "indigo", t: "Ask NilObs", s: `Ask anything. Answers draw on ${OBS.length} real observations and ${CARDS.length} Q&As, and show the records they came from. Quick or deep.`, tag: `from ${COSTS.askQuick} credit` },
+    { icon: I.FileCheck, c: "teal", t: "Close-out drafts", s: "On any observation: why it was raised, the likely root cause, the fix on board, and a close-out response you can copy. Saved for next time.", tag: `${COSTS.explain} credit` },
+    { icon: I.Camera, c: "sky", t: "Photo check", s: "Snap an area, a piece of equipment or a record. See what an inspector would flag, why, and how to fix it first, with similar findings from real inspections. Photos aren't stored.", tag: `${COSTS.photo} credits a photo` },
   ] as const
   return (
     <section id="ai" className="gutter scroll-mt-20 py-20">

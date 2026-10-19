@@ -166,8 +166,8 @@ const TOUR: { label: string; hint: string; screen?: Screen; reset?: boolean; nig
   { label: "Set up in two taps", hint: "Pick your rank", reset: true, icon: <I.Users size={17} /> },
   { label: "Build a brief", hint: "Oil major, port, rank", screen: "setup", icon: <I.Clipboard size={17} /> },
   { label: "Rehearse with an AI inspector", hint: "Feedback on each answer", screen: "practice", icon: <I.Mic size={17} /> },
-  { label: "Five-minute daily drill", hint: "Flashcards and a streak", screen: "drill", icon: <I.Flame size={17} /> },
-  { label: "Rate yourself on real questions", hint: "See what to show", screen: "bank", icon: <I.Book size={17} /> },
+  { label: "Photo-check an area", hint: "What an inspector would flag", screen: "photo", icon: <I.Camera size={17} /> },
+  { label: "Ten flashcards a day", hint: "Spaced repetition and a streak", screen: "drill", icon: <I.Flame size={17} /> },
   { label: "Share a debrief", hint: "Anonymous, earns briefs", screen: "share", icon: <I.Plus size={17} /> },
 ]
 
@@ -215,7 +215,7 @@ export function Experience() {
               <WordRotate words={ROTATE_PORTS} duration={2200} className="text-signal-ink" />
             </h1>
             <p className="max-w-[54ch] text-[18px] leading-relaxed text-mute">
-              A brief for your oil major, port and rank. The records to have ready. An AI inspector to rehearse with, and five minutes of drills a day. All built from what officers were actually asked.
+              A brief for your oil major, port and rank. The records to have ready. An AI inspector to rehearse with, a photo check for the spaces they'll walk, and five minutes of drills a day. All built from what officers were actually asked.
             </p>
 
             <div className="flex flex-col gap-3">

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 
 export type AppScreen =
   | "today" | "stories" | "setup" | "loading" | "brief" | "practice" | "drill" | "bank" | "share" | "wallet"
-  | "train" | "session" | "spot" | "radar" | "kit" | "me" | "ask"
+  | "train" | "session" | "spot" | "radar" | "kit" | "me" | "ask" | "photo"
 
 interface Intent {
   official?: boolean
@@ -11,6 +11,8 @@ interface Intent {
   packId?: string
   deck?: import("@/fleet").DeckId
   ask?: string
+  /** Rank picked on the site, used to pre-fill onboarding. */
+  rank?: string
 }
 interface Nav {
   view: "site" | "app"
@@ -23,7 +25,7 @@ const Ctx = createContext<Nav | null>(null)
 
 const readHash = () => {
   try {
-    return window.location.hash === "#app" ? "app" : "site"
+    return window.location.hash === "#app" || window.location.hash.startsWith("#app/") ? "app" : "site"
   } catch {
     return "site"
   }
@@ -43,7 +45,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
     setIntent((p) => ({ ...i, n: p.n + 1 }))
     setView("app")
     try {
-      if (window.location.hash !== "#app") window.location.hash = "app"
+      const target = i.screen ? `#app/${i.screen}` : "#app"
+      if (!window.location.hash.startsWith("#app")) window.location.hash = target.slice(1)
+      else if (window.location.hash !== target) window.history.replaceState(null, "", target)
     } catch {
       /* ignore */
     }

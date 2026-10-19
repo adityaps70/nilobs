@@ -1,11 +1,36 @@
 // POST /api/ai — NilObs AI endpoint.
 // The browser never sees your Anthropic key: it is the ANTHROPIC_API_KEY secret on the Worker.
-// Body: { messages: [{ role: "user" | "assistant", content: string }], tier?: "quick" | "default" | "complex", json?: boolean }
+// Body: { messages: [{ role: "user" | "assistant", content: string }], tier?: "quick" | "default" | "complex", json?: boolean,
+//         images?: [{ media_type: "image/jpeg" | "image/png" | "image/webp" | "image/gif", data: base64 }] }
+// Images (Photo check) are shown to Claude with the last user turn. They are never stored or logged.
 // Streams back plain text. If the answer fails part-way, it sends "\u001e" followed by a JSON error.
+import { limited, originAllowed, reply } from "./guard.js"
 
 const EFFORT = { quick: "low", default: "medium", complex: "high" }
 const MAX_TOKENS = { quick: 3000, default: 6000, complex: 8000 }
 const MAX_INPUT_CHARS = 120000
+export const MAX_IMAGES = 3
+export const MAX_IMAGE_CHARS = 2_000_000 // base64 characters per image (about 1.5 MB); the app sends ~1280 px JPEGs
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+const B64 = /^[A-Za-z0-9+/]+={0,2}$/
+
+/** Checks the optional images list. Returns the clean list, or an error string. */
+export function cleanImages(raw) {
+  if (raw == null) return []
+  if (!Array.isArray(raw)) return "images must be a list"
+  if (raw.length > MAX_IMAGES) return `At most ${MAX_IMAGES} photos at a time`
+  const out = []
+  for (const im of raw) {
+    if (!im || typeof im !== "object") return "Bad image"
+    const media_type = String(im.media_type || "")
+    const data = typeof im.data === "string" ? im.data : ""
+    if (!IMAGE_TYPES.includes(media_type)) return "Photos must be JPEG, PNG, WebP or GIF"
+    if (!data || data.length > MAX_IMAGE_CHARS) return "Photo too large"
+    if (data.length % 4 !== 0 || !B64.test(data)) return "Bad image data"
+    out.push({ type: "image", source: { type: "base64", media_type, data } })
+  }
+  return out
+}
 const ERR = "\u001e"
 
 const SYSTEM =
@@ -13,38 +38,15 @@ const SYSTEM =
   "Follow the instructions given in the user's message, keep to ship inspections and seafaring, " +
   "and never invent regulation numbers or OCIMF question wording."
 
-// Best-effort limit per IP, per Worker isolate. Add the AI_LIMIT rate-limit binding (see wrangler.jsonc) for a real one.
-const hits = new Map()
-function localLimited(ip, perMinute) {
-  const now = Date.now()
-  const list = (hits.get(ip) || []).filter((t) => now - t < 60000)
-  list.push(now)
-  hits.set(ip, list)
-  if (hits.size > 5000) hits.clear()
-  return list.length > perMinute
-}
-
-const reply = (status, body) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } })
-
 export async function handleAi(request, env, fetchImpl = fetch) {
   if (request.method !== "POST") return reply(405, { error: "Use POST" })
   const key = env.ANTHROPIC_API_KEY
   if (!key) return reply(500, { error: "The server is missing the ANTHROPIC_API_KEY secret" })
 
-  // Only accept calls from the site itself (plus any origins you list)
-  const self = new URL(request.url).origin
-  const allowed = [self, ...String(env.NILOBS_ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean)]
-  const origin = request.headers.get("origin")
-  if (!origin || !allowed.includes(origin)) return reply(403, { error: "Origin not allowed" })
-
-  const ip = request.headers.get("cf-connecting-ip") || (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown"
-  if (env.AI_LIMIT?.limit) {
-    const { success } = await env.AI_LIMIT.limit({ key: ip })
-    if (!success) return reply(429, { error: "Too many requests. Try again in a minute." })
-  } else if (localLimited(ip, Number(env.NILOBS_RATE_PER_MINUTE || 12))) {
+  // Only accept calls from the site itself (plus any origins you list), and limit each IP
+  if (!originAllowed(request, env)) return reply(403, { error: "Origin not allowed" })
+  if (await limited(request, env, { name: "ai", binding: env.AI_LIMIT, perMinute: Number(env.NILOBS_RATE_PER_MINUTE || 12) }))
     return reply(429, { error: "Too many requests. Try again in a minute." })
-  }
 
   let body
   try {
@@ -52,6 +54,11 @@ export async function handleAi(request, env, fetchImpl = fetch) {
   } catch {
     return reply(400, { error: "Body must be JSON" })
   }
+  const images = cleanImages(body?.images)
+  if (typeof images === "string") return reply(images === "Photo too large" ? 413 : 400, { error: images })
+  // photos cost more to read, so they get their own, tighter per-IP limit
+  if (images.length && (await limited(request, env, { name: "photo", binding: env.PHOTO_LIMIT, perMinute: Number(env.NILOBS_PHOTO_PER_MINUTE || 4) })))
+    return reply(429, { error: "Too many photo checks. Try again in a minute." })
   const tier = ["quick", "default", "complex"].includes(body?.tier) ? body.tier : "default"
   const models = {
     quick: env.NILOBS_MODEL_QUICK || "claude-haiku-5-5",
@@ -69,6 +76,10 @@ export async function handleAi(request, env, fetchImpl = fetch) {
     if (last && last.role === m.role) last.content += "\n\n" + m.content
     else messages.push({ ...m })
   }
+  if (images.length) {
+    const last = messages[messages.length - 1]
+    last.content = [...images, { type: "text", text: last.content }]
+  }
 
   let upstream
   try {
@@ -76,7 +87,8 @@ export async function handleAi(request, env, fetchImpl = fetch) {
       method: "POST",
       headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({
-        model: models[tier],
+        // photos always go to the main (vision) model, never the quick one
+        model: images.length && tier === "quick" ? models.default : models[tier],
         max_tokens: MAX_TOKENS[tier],
         system: body?.json ? SYSTEM + " Reply with only the JSON value requested, with no other text." : SYSTEM,
         messages,

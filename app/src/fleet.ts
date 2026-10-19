@@ -142,9 +142,9 @@ export interface Deck {
 export const DECKS: Deck[] = [
   { id: "trending", name: "Trending SIRE 2.0 questions", sub: "Rank-wise questions and the answers inspectors expect", cost: 0, color: "blue" },
   { id: "ratings", name: "Rating interviews", sub: "What inspectors ask ABs, OSs, pumpmen and fitters", cost: 0, color: "teal" },
-  { id: "ecdis", name: "ECDIS: inspectors' favourites", sub: "Settings, symbols, updates and failures", cost: 30, color: "violet" },
-  { id: "cdi", name: "CDI inspection prep", sub: "Chemical tanker inspections, documents and recent findings", cost: 30, color: "amber" },
-  { id: "china", name: "China coast: MSA safety 100", sub: "Fishing fleets, watchkeeping and VHF off China", cost: 30, color: "rose" },
+  { id: "ecdis", name: "ECDIS: inspectors' favourites", sub: "Settings, symbols, updates and failures", cost: 40, color: "violet" },
+  { id: "cdi", name: "CDI inspection prep", sub: "Chemical tanker inspections, documents and recent findings", cost: 40, color: "amber" },
+  { id: "china", name: "China coast: MSA safety 100", sub: "Fishing fleets, watchkeeping and VHF off China", cost: 40, color: "rose" },
 ]
 export const deckById = (id: DeckId) => DECKS.find((d) => d.id === id)!
 

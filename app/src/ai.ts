@@ -12,12 +12,36 @@ export type SampleOpts = {
   signal?: AbortSignal
   modelTier?: "quick" | "default" | "complex"
   cache?: boolean | { gcTime?: number; refresh?: boolean }
+  /** Photos for Claude to look at (Photo check). Only where imageLimits() says this view can send them. */
+  images?: Blob[]
 }
 export type SampleMsg = { role: "user" | "assistant"; content: string }
+export type ImageLimits = { maxCount: number; maxInputBytes: number; mediaTypes: string[] }
 export interface SampleFn {
   (input: string | SampleMsg[], opts?: SampleOpts): Promise<{ text: string; truncated: boolean }>
   json: <T = unknown>(input: string | SampleMsg[], opts?: SampleOpts) => Promise<T>
+  limits?: () => Promise<{ maxPromptBytes?: number; images?: ImageLimits }>
 }
+
+/** What this view allows for photos, or null when it can't send them. Never asks the viewer anything. */
+export async function imageLimits(s: SampleFn | null | undefined): Promise<ImageLimits | null> {
+  if (!s?.limits) return null
+  try {
+    const l = await s.limits()
+    return l?.images && l.images.maxCount > 0 ? l.images : null
+  } catch {
+    return null
+  }
+}
+
+/** Blob → base64 (no data: prefix), for the hosted server. */
+async function blobBase64(b: Blob): Promise<string> {
+  const buf = new Uint8Array(await b.arrayBuffer())
+  let bin = ""
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+const SERVER_IMAGES: ImageLimits = { maxCount: 3, maxInputBytes: 1_400_000, mediaTypes: ["image/jpeg", "image/png", "image/webp"] }
 type ClaudeGlobal = { use?: (n: string) => Promise<unknown> }
 
 // Hosted builds (your own domain) call your server at this path; the Claude-artifact build leaves it empty.
@@ -47,7 +71,11 @@ export function httpSample(endpoint: string): SampleFn {
     const messages: SampleMsg[] = typeof input === "string" ? [{ role: "user", content: input }] : input
     const tier = opts.modelTier || "default"
     const key = JSON.stringify([messages, tier, json])
-    const ttl = opts.cache === false ? 0 : typeof opts.cache === "object" ? opts.cache.gcTime ?? 300000 : 300000
+    const images = opts.images?.length ? opts.images : null
+    if (images && images.length > SERVER_IMAGES.maxCount) throw { code: "image_rejected", message: "Too many photos" }
+    if (images?.some((b) => b.size > SERVER_IMAGES.maxInputBytes || !SERVER_IMAGES.mediaTypes.includes(b.type))) throw { code: "image_rejected", message: "Photo too large or wrong type" }
+    // photos are never cached: the same words with a new photo must get a new answer
+    const ttl = images || opts.cache === false ? 0 : typeof opts.cache === "object" ? opts.cache.gcTime ?? 300000 : 300000
     const hit = answerCache.get(key)
     if (ttl && hit && Date.now() - hit.at < ttl && !(typeof opts.cache === "object" && opts.cache.refresh)) {
       opts.onText?.({ text: hit.text, delta: hit.text })
@@ -55,10 +83,13 @@ export function httpSample(endpoint: string): SampleFn {
     }
     let res: Response
     try {
+      const payload: Record<string, unknown> = { messages, tier, json }
+      if (images) payload.images = await Promise.all(images.map(async (b) => ({ media_type: b.type, data: await blobBase64(b) })))
+      if (opts.signal?.aborted) throw new Error("aborted")
       res = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages, tier, json }),
+        body: JSON.stringify(payload),
         signal: opts.signal,
       })
     } catch {
@@ -66,7 +97,7 @@ export function httpSample(endpoint: string): SampleFn {
       throw { code: "upstream_error", message: "Network error" }
     }
     if (!res.ok || !res.body) {
-      const code = res.status === 429 ? "rate_limited" : res.status === 413 ? "prompt_too_large" : res.status === 400 ? "invalid_request" : "upstream_error"
+      const code = res.status === 429 ? "rate_limited" : res.status === 413 ? (images ? "image_rejected" : "prompt_too_large") : res.status === 400 ? (images ? "image_rejected" : "invalid_request") : "upstream_error"
       throw { code, message: `Server answered ${res.status}` }
     }
     const reader = res.body.getReader()
@@ -127,6 +158,7 @@ export function httpSample(endpoint: string): SampleFn {
     if (!r.ok) throw { code: "invalid_json", message: "Reply was not JSON", text }
     return r.v
   }
+  sample.limits = async () => ({ maxPromptBytes: 120000, images: SERVER_IMAGES })
   return sample
 }
 
@@ -165,6 +197,10 @@ export function aiErrorCopy(e: AiErr) {
       return "The grade came back garbled. Try again."
     case "prompt_too_large":
       return "That was too long to send. Try a shorter answer."
+    case "image_rejected":
+      return "That photo couldn't be read. Try a different one (JPEG or PNG)."
+    case "images_unavailable":
+      return "Photos can't be sent from this view."
     default:
       return "The connection dropped. Try again."
   }
