@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test tests/worker.test.mjs && cd app && node --test tests/economy.test.mjs tests/photo.test.mjs",
+    "test": "node --test tests/worker.test.mjs tests/auth.test.mjs && cd app && node --test tests/economy.test.mjs tests/photo.test.mjs tests/sync.test.mjs",
     "build:app": "cd app && npm install && npm run build"
   },
   "devDependencies": {

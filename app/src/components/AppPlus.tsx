@@ -1,6 +1,7 @@
 // New app screens built on the fleet data: Train (decks + spaced repetition), Spot the observation,
 // Observation radar, Ready kit and Progress, plus the habit widgets used on Today.
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react"
+import { AccountCard } from "@/auth"
 import { AnimatePresence, motion } from "motion/react"
 
 import * as I from "@/components/icons"
@@ -943,6 +944,7 @@ export function MeScreen({ go, rank, ship, setProfile, night, setNight }: { go: 
     <>
       <TopBar title="Your progress" onBack={() => go("today")} />
       <Scroll className="gap-4">
+        <AccountCard />
         <section className="glass-deep flex flex-col gap-4 rounded-[24px] p-5">
           <div className="flex items-center gap-4">
             <LevelRing size={78} stroke={6} dark />

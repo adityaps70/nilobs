@@ -401,7 +401,7 @@ function Onboard({ onDone, initialRank }: { onDone: (p: { rank: string; ship: st
       <LogoMark size={56} />
       <div className="flex flex-col gap-2">
         <h2 className="display text-[30px] leading-[1.05] font-bold">Welcome aboard</h2>
-        <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} Two taps and NilObs is set up for your job. No name, no ship, no sign-up.</p>
+        <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} Two taps and NilObs is set up for your job. No ship details and no sign-up to start.</p>
       </div>
       <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5">
         <IconTile icon={I.Coin} color="teal" size={40} />

@@ -90,7 +90,7 @@ export const CYCLE_DAYS = 30
 export const YEAR_CYCLES = 12
 export const WELCOME = { credits: 60, days: 30 }
 export const EARNED_DAYS = 60
-const LEDGER_MAX = 120
+export const LEDGER_MAX = 120
 
 /* ---------------- price list ---------------- */
 export interface Plan {

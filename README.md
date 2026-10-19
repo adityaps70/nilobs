@@ -34,6 +34,18 @@ Credits are spent soonest-expiring first: plan credits refill every 30 days and 
 
 XP is rank, not money: it never goes down. Ten levels from Cadet to Vetting legend; each level-up pays credits (10 to 100), badges pay 5, the daily chest pays 3, 7/30/100-day streaks pay 10/40/100, and a shared debrief pays 25 (up to 4 a month). Streaks of 7+ and 30+ days multiply learning XP by 1.2 and 1.5. AI answers and photo checks give a little XP, capped at 30 a day, so paying for AI doesn't buy rank.
 
+## Sign in with Google
+
+Anyone can practise without an account. The AI features (Ask NilObs, the AI inspector, Photo check, AI plans and close-out drafts) need a Google sign-in, and signing in keeps credits, plan, XP, streak, briefs and saved screens in step on every device.
+
+- **Google:** project "NilObs" in Google Cloud, consent screen published (name, email and profile only, so no Google review is needed), Web client with origin `https://nilobs.com` (and `http://localhost:8787` for `wrangler dev`). Its client ID is the `GOOGLE_CLIENT_ID` var; there is no client secret, because the page uses Google's own button and the Worker checks the ID token against Google's public keys.
+- **Cloudflare D1** database `nilobs` (binding `DB`) holds users, sessions (only a hash of each session token) and one JSON copy of each user's state with a version number. Tables: `migrations/0001_init.sql`; the Worker also creates them on first use.
+- **Session:** an HttpOnly, Secure, SameSite=Lax cookie `nilobs_sid`, 30 days, extended while in use. State-changing routes check the request's origin.
+- **Sync:** the app writes to the browser as before; `app/src/auth.tsx` saves changes to `/api/state` a few seconds later and picks up other devices' changes when the app comes to the front. Two devices saving at once: the second one gets the newer copy back, merges (`app/src/sync.ts`: every spend and refund kept, progress never goes backwards, newest screen wins) and saves again. First sign-in on a device used signed-out: the account's credits win and purchases made on that device are added, so free credits don't stack.
+- **Gate:** with `GOOGLE_CLIENT_ID` and `DB` set, `/api/ai` and `/api/voice` answer 401 to signed-out visitors. Without them, sign-in is simply off and the AI is open (how local tests run).
+- **Delete:** Progress & badges → Delete account erases the user, sessions and state. Privacy page: `public/privacy.html` (served at `/privacy`).
+- Credits are still worked out in the browser and synced, so a determined user could edit them. Before real payments, move charging to the Worker.
+
 ## Photo check
 
 Crew photograph an area, a piece of equipment or a record (up to 3 photos per check) and pick where it is on board. Claude looks at it the way a SIRE 2.0 inspector would and returns what would be flagged, how serious it is, why, and the fix, with numbered markers on the photo and similar findings from the real, de-identified observations in `app/src/gen/obs.json`. Results can be copied as a defect list, and any finding can be taken to Ask NilObs.
@@ -96,8 +108,12 @@ app/src            app source (React, Tailwind v4, Magic UI components)
 app/src/gen        de-identified fleet data (stories, observations, flashcards, ready kit)
 app/src/economy.ts plans, prices, credit rules (pure functions, tested)
 app/src/photo.ts   Photo check: areas, examples, prompt, reply clean-up (pure, tested)
+app/src/auth.tsx   Sign in with Google, account card, sync with the account
+app/src/sync.ts    merge rules for two devices' copies (pure, tested)
+worker/auth.js     Google token check, sessions, /api/me, /api/state (D1)
+migrations/        D1 schema
 app/build.mjs      builds public/index.html
-tests/             Worker tests (app/tests: economy and Photo check)
+tests/             Worker and sign-in tests (app/tests: economy, Photo check, sync)
 ```
 
 ## Data

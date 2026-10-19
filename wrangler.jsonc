@@ -13,13 +13,21 @@
     { "pattern": "www.nilobs.com", "custom_domain": true }
   ],
   "workers_dev": true,
+  // Accounts for Sign in with Google: users, sessions and each user's synced state (schema: migrations/)
+  "d1_databases": [
+    { "binding": "DB", "database_name": "nilobs", "database_id": "215d3c76-205d-44e6-b889-078746d74c70", "migrations_dir": "migrations" }
+  ],
   "vars": {
     "NILOBS_MODEL": "claude-sonnet-5-5",
     "NILOBS_MODEL_QUICK": "claude-haiku-5-5",
     "NILOBS_RATE_PER_MINUTE": "12",
     "NILOBS_PHOTO_PER_MINUTE": "4",
     "NILOBS_VOICE_MODEL": "muga",
-    "NILOBS_VOICE_PER_MINUTE": "20"
+    "NILOBS_VOICE_PER_MINUTE": "20",
+    // Old workers.dev pages redirect here (API calls on workers.dev keep working)
+    "NILOBS_CANONICAL_HOST": "nilobs.com",
+    // Google OAuth Web client (Google Cloud project "NilObs"). A client ID is public; no client secret is used.
+    "GOOGLE_CLIENT_ID": "350187455866-i72se8qt5igs4a6b1hn96hgmrv740qri.apps.googleusercontent.com"
   }
   // Secrets (never commit them): set ANTHROPIC_API_KEY (Claude, for the AI) and RUMIK_API_KEY (Rumik, for the
   // AI inspector's voice) in the Cloudflare dashboard under Workers & Pages > nilobs > Settings > Variables and Secrets,

@@ -317,7 +317,7 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
         </section>
 
         {sample === null ? (
-          <AiOff>Sign in to Claude at the top right, then reload, to check photos. The AI runs on your own Claude account.</AiOff>
+          <AiOff title="Sign in with Google to check photos">Sign in to Claude at the top right, then reload, to check photos. The AI runs on your own Claude account.</AiOff>
         ) : lim === null ? (
           <div className="flex gap-3 rounded-2xl border border-dashed border-line bg-surface p-4 text-[13.5px] leading-snug">
             <IconTile icon={I.Camera} color="sky" size={34} />

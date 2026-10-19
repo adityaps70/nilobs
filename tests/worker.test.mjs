@@ -129,9 +129,9 @@ test("voice: provider errors are mapped, and a rejected key says so", async () =
 test("health reports whether AI and voice are configured", async () => {
   const assets = { fetch: async () => new Response("site") }
   const h1 = await (await worker.fetch(new Request(`${SITE}/api/health`), { ASSETS: assets, ANTHROPIC_API_KEY: "k" })).json()
-  assert.deepEqual(h1, { ok: true, ai: true, voice: false })
+  assert.deepEqual(h1, { ok: true, ai: true, voice: false, signin: false })
   const h2 = await (await worker.fetch(new Request(`${SITE}/api/health`), { ASSETS: assets, ANTHROPIC_API_KEY: "k", RUMIK_API_KEY: "r" })).json()
-  assert.deepEqual(h2, { ok: true, ai: true, voice: true })
+  assert.deepEqual(h2, { ok: true, ai: true, voice: true, signin: false })
 })
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg=="
@@ -187,4 +187,20 @@ test("www.nilobs.com redirects to nilobs.com, keeping the path and query", async
   assert.equal(res.headers.get("location"), "https://nilobs.com/app?x=1")
   const home = await worker.fetch(new Request("https://nilobs.com/"), { ASSETS: assets })
   assert.equal(await home.text(), "site")
+})
+
+test("workers.dev pages move to nilobs.com; the API and other hosts don't", async () => {
+  const { default: worker } = await import("../worker/index.js")
+  const env = { NILOBS_CANONICAL_HOST: "nilobs.com", ASSETS: { fetch: async (r) => new Response("asset " + new URL(r.url).pathname) } }
+  const r = await worker.fetch(new Request("https://nilobs.someone.workers.dev/?x=1"), env)
+  assert.equal(r.status, 301)
+  assert.equal(r.headers.get("location"), "https://nilobs.com/?x=1")
+  const deep = await worker.fetch(new Request("https://nilobs.someone.workers.dev/privacy?a=b"), env)
+  assert.equal(deep.headers.get("location"), "https://nilobs.com/privacy?a=b")
+  const api = await worker.fetch(new Request("https://nilobs.someone.workers.dev/api/health"), env)
+  assert.equal(api.status, 200)
+  const local = await worker.fetch(new Request("http://localhost:8788/"), env)
+  assert.equal(await local.text(), "asset /")
+  const priv = await worker.fetch(new Request("https://nilobs.com/privacy"), env)
+  assert.equal(await priv.text(), "asset /privacy.html")
 })

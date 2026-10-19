@@ -13,6 +13,7 @@ import { ConfidenceCheck, FinalCta, LandingHero, Lessons, Pricing, SiteNav, Stor
 import { AiSection, HabitSection, RadarSection, SpotSection } from "@/sections/fleetSections"
 import { PlansSheet } from "@/components/Plans"
 import { HOSTED } from "@/ai"
+import { AuthProvider } from "@/auth"
 
 function Site() {
   const { selected, setSelected, jump } = useStorySelection()
@@ -115,13 +116,15 @@ if (HOSTED && "serviceWorker" in navigator) {
 createRoot(document.getElementById("root")!).render(
   <MotionConfig reducedMotion="user">
     <NavProvider>
-      <WalletProvider>
-        <ProgressProvider>
-          <Boundary>
-            <Root />
-          </Boundary>
-        </ProgressProvider>
-      </WalletProvider>
+      <AuthProvider>
+        <WalletProvider>
+          <ProgressProvider>
+            <Boundary>
+              <Root />
+            </Boundary>
+          </ProgressProvider>
+        </WalletProvider>
+      </AuthProvider>
     </NavProvider>
   </MotionConfig>
 )

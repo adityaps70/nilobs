@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
 import { CARDS, CHAPTER_NAMES, OBS, TYPE_NAME, type CardI, type Obs } from "@/fleet"
 import { RANK_NAMES, RANK_TOPICS } from "@/data"
 import { STORIES, type Story } from "@/stories"
+import { UNAUTHORIZED_EVENT, useAiGate } from "@/auth"
 
 /* ---------------- capability ---------------- */
 export type SampleOpts = {
@@ -97,6 +98,11 @@ export function httpSample(endpoint: string): SampleFn {
       throw { code: "upstream_error", message: "Network error" }
     }
     if (!res.ok || !res.body) {
+      if (res.status === 401) {
+        // signed out or the session ended: tell the app so it shows the sign-in again
+        window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+        throw { code: "session_expired", message: "Sign in again" }
+      }
       const code = res.status === 429 ? "rate_limited" : res.status === 413 ? (images ? "image_rejected" : "prompt_too_large") : res.status === 400 ? (images ? "image_rejected" : "invalid_request") : "upstream_error"
       throw { code, message: `Server answered ${res.status}` }
     }
@@ -162,8 +168,9 @@ export function httpSample(endpoint: string): SampleFn {
   return sample
 }
 
-/** undefined while checking, null when AI can't run in this view, else the sample function. */
+/** undefined while checking, null when AI can't run in this view (or needs a sign-in first), else the sample function. */
 export function useSample() {
+  const gate = useAiGate()
   const [s, setS] = useState<SampleFn | null | undefined>(undefined)
   useEffect(() => {
     let on = true
@@ -172,6 +179,8 @@ export function useSample() {
       on = false
     }
   }, [])
+  if (gate === "loading") return undefined
+  if (gate === "closed") return null
   return s
 }
 
@@ -190,7 +199,7 @@ export function aiErrorCopy(e: AiErr) {
     case "rate_limited":
       return "Lots of AI requests just now. Give it a minute, then try again."
     case "session_expired":
-      return "Sign in to Claude again to use the AI features."
+      return HOSTED ? "Your sign-in ended. Sign in with Google again to use the AI." : "Sign in to Claude again to use the AI features."
     case "refused":
       return "Claude couldn't answer that one. Try asking it a different way."
     case "invalid_json":

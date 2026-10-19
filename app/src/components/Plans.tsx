@@ -460,7 +460,7 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
             ))}
           </ol>
         </Section>
-        <p className="text-center text-[11.5px] leading-snug text-mute">Prototype: purchases are simulated and credits are kept in this browser. Plan dates use your device's clock. Last checked {dayOf(Date.now())}.</p>
+        <p className="text-center text-[11.5px] leading-snug text-mute">Prototype: purchases are simulated. Signed in, your credits follow your Google account; signed out, they stay in this browser. Plan dates use your device's clock. Last checked {dayOf(Date.now())}.</p>
       </Scroll>
     </>
   )
