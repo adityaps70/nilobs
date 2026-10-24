@@ -43,16 +43,18 @@ NilObs isn't tied to any one company. Onboarding offers every rank on board (dec
 - **Prepared where it exists:** officers, engineers, cadets and ratings get the hand-written flashcards and interview questions that fit them.
 - **The AI fills the gaps:** for roles without prepared material (catering, shore staff, "Other") the AI inspector writes interview questions for that role, and a role pack (3 credits) writes flashcards and a checklist. Shore staff are asked what an inspector, an oil major's vetting team or a TMSA auditor would ask the company. Every AI prompt (Ask, close-outs, plans, photo checks, grading) says who the user is, on board or ashore.
 
-## Sign in with Google
+## Sign in (Google or an emailed code), and trying it as a guest
 
-On nilobs.com the app opens after a Google sign-in: "Start free" (or any link into the app) shows a sign-in screen first, then the app opens on the screen or plan the visitor picked (a new account picks its role first). The demo game and readiness check on the home page stay open to everyone. The account's credits and plan live on the server, and XP, streak, briefs and saved screens stay in step on every device. A device opens on the account's own profile and progress (`app/src/auth.tsx` loads them before `app/src/app/AppGate.tsx` lets the app open), and a device that hasn't picked a role never overwrites the account's.
+On nilobs.com the app opens straight away. Signed out, it's a **guest**: flashcards, today's drill, Spot the observation, the radar, stories and the live feed work, and progress stays in the browser until the first sign-in makes it the account's. The AI, buying, the pulse, leagues, crews and certificates ask for a sign-in (`app/src/app/AppGate.tsx`: `GuestBanner`, `SignInScreen`; the welcome screen also offers "Already use NilObs? Sign in").
+
+People sign in with Google, or with a **6-digit code sent by email** (`worker/auth.js` → `/api/auth/email/start` and `/api/auth/email/verify`; codes are hashed, last 10 minutes, five tries, five sends an hour per address). One account per address: a later Google sign-in with the same email opens the same account, and a code sent to a Google account's address opens that account. Email goes out through Resend (secret `RESEND_API_KEY`) or a Cloudflare Email Service binding `EMAIL` (`worker/email.js`); until one is set, only Google shows. The account's credits and plan live on the server, and XP, streak, briefs and saved screens stay in step on every device. A device opens on the account's own profile and progress (`app/src/auth.tsx` loads them before `app/src/app/AppGate.tsx` lets the app open), and a device that hasn't picked a role never overwrites the account's.
 
 - **Google:** project "NilObs" in Google Cloud, consent screen published (name, email and profile only, so no Google review is needed), Web client with origin `https://nilobs.com` (and `http://localhost:8787` for `wrangler dev`). Its client ID is the `GOOGLE_CLIENT_ID` var; there is no client secret, because the page uses Google's own button and the Worker checks the ID token against Google's public keys.
 - **Cloudflare D1** database `nilobs` (binding `DB`) holds users, sessions (only a hash of each session token) and one JSON copy of each user's state with a version number. Tables: `migrations/0001_init.sql`; the Worker also creates them on first use.
 - **Session:** an HttpOnly, Secure, SameSite=Lax cookie `nilobs_sid`, 30 days, extended while in use. State-changing routes check the request's origin.
 - **Sync (progress and screens, not credits):** the app writes to the browser as before; `app/src/auth.tsx` saves changes to `/api/state` a few seconds later and picks up other devices' changes when the app comes to the front. Two devices saving at once: the second one gets the newer copy back, merges (`app/src/sync.ts`: progress never goes backwards, newest screen wins) and saves again. A `wallet` sent to `/api/state` is dropped.
 - **Gate:** with `GOOGLE_CLIENT_ID` and `DB` set, `/api/ai` and `/api/voice` answer 401 to signed-out visitors. Without them, sign-in is simply off and the AI is open (how local tests run).
-- **Delete:** Profile & progress → Delete account erases the user, sessions, state and wallet. Payment records stay (no name or email), and a one-way hash of the Google ID is kept in `starts` so a new account with the same Google login doesn't get the free starting credits again. Pages: `public/privacy.html`, `public/terms.html`, `public/refunds.html` (served at `/privacy`, `/terms`, `/refunds`).
+- **Delete:** Profile & progress → Delete account erases the user, sessions, state, wallet, reminders, shared debriefs, crew memberships and certificate (crews they own close). Payment records stay (no name or email), and a one-way hash of the Google ID is kept in `starts` so a new account with the same Google login doesn't get the free starting credits again. Pages: `public/privacy.html`, `public/terms.html`, `public/refunds.html` (served at `/privacy`, `/terms`, `/refunds`).
 
 ## The wallet on the server
 
@@ -65,12 +67,31 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 
 ## Live features (worth opening every day)
 
-- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): every 3 hours the Worker reads public sources (UK MAIB accident reports and MCA guidance through GOV.UK's search API, plus the SAFETY4SEA, Splash247, gCaptain and Marine Insight feeds), keeps what's new, and has Claude (the quick model) judge each item's relevance to tanker crews and write a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
+- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): the Worker reads public sources about every 3 hours, a few per run, oldest first (UK MAIB reports and MCA guidance through GOV.UK's search API; the US Coast Guard, Paris MoU and AMSA; OCIMF, CHIRP Maritime and P&I clubs (Britannia, UK P&I, Gard, NorthStandard, Steamship Mutual); and SAFETY4SEA, Splash247, gCaptain, Marine Insight, The Maritime Executive and Hellenic Shipping News). A source without a fixed feed address is found from its page's `<link rel="alternate">` and remembered; one that fails is retried after 12 hours. It keeps what's new, and has Claude (the quick model) judge each item's relevance to tanker crews and write a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
 - **Today's drill**: 3 flashcards (your brief's focus topics if the inspection is within 21 days, otherwise your weakest), 2 Spot rounds and one live update; +30 XP once a day (`progress.drill`).
 - **Daily reminders** (`worker/push.js`, `public/sw.js`): opt-in web push at the hour each person picks, in their own time zone, once a day. The Worker makes its own VAPID signing key on first use (kept in D1), sends empty pushes, and the service worker asks `/api/push/message` for a personal line (inspection countdown, streak, new updates). Only Google, Mozilla, Apple and Microsoft push addresses are accepted. On iPhone it works once NilObs is added to the Home Screen.
 - **Inspection pulse** (`worker/pulse.js`): debriefs shared from the app are checked and de-identified by Claude (names of ships, people, companies, oil majors, terminals and ports removed; a last regex pass catches ship prefixes, IMO numbers and emails). Others see only that version, plus trending topics for the last 14 days. Three a day per person; the owner can hide any of them on the dashboard.
 - **Weekly leagues** (`worker/league.js`): this week's XP (Monday to Sunday, UTC) by role group, from synced progress, at most 500 XP a day counted. Anonymous ("Second Officer 4821") unless someone chooses a display name.
-- **Schedule**: `wrangler.jsonc` → `triggers.crons` runs every 15 minutes (reminders due, debriefs the AI couldn't check yet) and reads the feed whenever the last read is more than about 3 hours old, so a deploy or a missed run catches up by itself. Database writes are batched to stay inside Cloudflare's per-run limits.
+- **Schedule**: `wrangler.jsonc` → `triggers.crons` runs every 15 minutes (reminders due, debriefs the AI couldn't check yet, and up to four feed sources that are due), so a deploy or a missed run catches up by itself. Database writes are batched to stay inside Cloudflare's per-run limits.
+
+## Crews, fleet plans, certificates and receipts
+
+- **Crews** (`worker/crews.js`, `app/src/components/Crew.tsx`): anyone signed in makes a crew and shares its link (`nilobs.com/join/CODE`, which opens `#app/crew/CODE`). Members see a private weekly board: first name, role, XP this week, streak, today's drill. The owner can rename it, make a new link (the old one stops working), remove people or delete it. Up to 5 crews per person.
+- **Fleet plans:** the owner buys seats through Razorpay (product `fleet:<crew>:<new|renew|add>:<seats>:<monthly|annual>`, priced by `fleetQuote` in `app/src/economy.ts`: ₹399 or $5 a seat a month, from 5 seats, a year for ten months, extra seats at the monthly price for each month left). Members take seats in the order they joined; a seat is Watchkeeper until the fleet's paid end, applied to the member's wallet the next time it's read (`seatFor` in `worker/wallet.js`). Someone who leaves keeps their seat to the end of the period. The owner gets a **readiness report** (name, email, role, last active, streak, drills, XP this week, practice scores by topic, weakest topics; CSV download). Members are told exactly that before joining a fleet.
+- **Certificates** (`app/src/cert.ts`, `worker/certs.js`): earned from synced progress (5+ cards in every topic for the role, 7 daily drills, an AI inspector session scored 6/10+). The public page `nilobs.com/c/<number>` is printable and is how anyone checks one. It says it isn't an official or STCW certificate.
+- **Receipts:** `GET /api/pay/receipts` lists the account's payments (Plans & credits shows them); `/receipt/<payment id>` is a printable receipt for the account that paid, from `NILOBS_BILLING_NAME` (Sea N Shore IT Solutions LLP). No GST is charged, so it's a payment receipt, not a tax invoice.
+
+## About and content review
+
+`public/about.html` (`/about`) says who runs NilObs, where the content comes from, that no named master mariner or inspector has reviewed it yet, and how to report a mistake. The study screens show the last review date (`app/src/meta.ts` → `CONTENT_REVIEWED`); update both when the content is reviewed.
+
+## Android app (Play Store)
+
+NilObs is a PWA (`public/manifest.webmanifest`, `public/sw.js`), so the Play Store version is a Trusted Web Activity that opens nilobs.com full screen:
+
+1. Open [PWABuilder](https://www.pwabuilder.com), enter `https://nilobs.com`, choose **Package for stores → Android**, package ID e.g. `com.nilobs.app`, and download the package. Keep the signing key and its passwords it gives you somewhere safe: every update needs them.
+2. In Cloudflare, add the vars `ANDROID_PACKAGE` (the package ID) and `ANDROID_CERT_SHA256` (the SHA-256 fingerprint PWABuilder shows; after enrolling in Play App Signing, add Google's fingerprint too, comma-separated). The Worker then serves `/.well-known/assetlinks.json`, which removes the browser bar in the app.
+3. In the Google Play Console (a one-time $25 developer account; an organisation account for the LLP skips the 14-day closed test that new personal accounts need), create the app and upload the `.aab`.
 
 ## Analytics dashboard (nilobs.com/admin)
 
@@ -159,6 +180,9 @@ worker/feed.js     the live industry feed: sources, AI takeaways, /api/feed
 worker/push.js     daily reminders: VAPID key, subscriptions, sending, the reminder text
 worker/pulse.js    the inspection pulse: shared debriefs, de-identified by the AI
 worker/league.js   weekly leagues
+worker/crews.js    crews, fleet plans (seats), the board and the readiness report
+worker/certs.js    certificates of completion and their public pages (/c/<number>)
+worker/email.js    sending sign-in codes (Resend or Cloudflare Email Service)
 worker/live.js     tables and helpers shared by the live features
 app/admin/         the analytics page (built into worker/admin-page.js)
 public/sw.js       offline copy of the app for use at sea
@@ -166,7 +190,9 @@ app/src            app source (React, Tailwind v4, Magic UI components)
 app/src/gen        de-identified fleet data (stories, observations, flashcards, ready kit)
 app/src/economy.ts plans, prices, credit rules (pure functions, tested)
 app/src/photo.ts   Photo check: areas, examples, prompt, reply clean-up (pure, tested)
-app/src/auth.tsx   Sign in with Google, account card, sync with the account
+app/src/auth.tsx   sign-in (Google, emailed code), account card, sync with the account
+app/src/cert.ts    what a certificate takes (shared with the Worker)
+app/src/components/Crew.tsx  crews, fleet plan, readiness report, certificate, receipts
 app/src/sync.ts    merge rules for two devices' copies of progress (pure, tested)
 app/src/credits.tsx the wallet in the app: the server's copy when signed in, a practice wallet otherwise
 worker/auth.js     Google token check, sessions, /api/me, /api/state (D1)

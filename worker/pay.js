@@ -20,6 +20,7 @@
 import * as E from "../app/src/economy.ts"
 import { reply } from "./guard.js"
 import { HttpError, checkoutModes, ensureWalletSchema, errorReply, mutate, readWallet, view } from "./wallet.js"
+import { applyFleet, fleetOrder, parseFleetKey } from "./crews.js"
 
 const API = "https://api.razorpay.com/v1"
 const enc = new TextEncoder()
@@ -53,6 +54,12 @@ async function grant(env, pay, paymentRef, paid) {
   if (paid && (Number(paid.amount) !== Number(pay.amount) || String(paid.currency || pay.currency).toUpperCase() !== pay.currency))
     throw new HttpError(400, "Amount doesn't match the order", "amount_mismatch")
   const via = pay.provider === "razorpay" ? "Razorpay" : "test"
+  if (String(pay.product).startsWith("fleet:")) {
+    // a fleet plan: the seats go to the crew (worker/crews.js); marking the payment paid is the once-only claim
+    const r = await env.DB.prepare("UPDATE payments SET status = 'paid', paid_at = ?, payment_ref = ? WHERE id = ? AND status != 'paid'").bind(Date.now(), String(paymentRef || ""), pay.id).run()
+    if (r?.meta?.changes === 1 && !(await applyFleet(env.DB, pay.product))) console.error("fleet payment not applied", pay.id, pay.product)
+    return { already: r?.meta?.changes !== 1 }
+  }
   const out = await mutate(env, pay.user_id, (d, now) => {
     const claim = `pay:${pay.id}`
     if (d.claims.includes(claim)) return { already: true }
@@ -128,6 +135,7 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
     // Razorpay's notification comes from Razorpay, not from a signed-in browser
     if (path === "/api/pay/razorpay/webhook") return await razorpayWebhook(request, env)
     if (!user) return reply(401, { error: "Sign in to buy" })
+    if (path === "/api/pay/receipts" && request.method === "GET") return reply(200, { receipts: await receiptsOf(env, user.id) })
     if (request.method !== "POST") return reply(405, { error: "Use POST" })
     let body = {}
     try {
@@ -139,11 +147,19 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
     if (path === "/api/pay/order") {
       const cur = body?.currency === "USD" ? "USD" : "INR"
       const key = String(body?.product || "")
-      const p = E.product(key)
-      if (!p) return reply(400, { error: "Unknown product", code: "bad_product" })
-      const { data } = await readWallet(env, user.id)
-      const can = E.canBuy(data.w, key, Date.now())
-      if (!can.ok) return reply(409, { error: can.why, code: "cannot_buy" })
+      let p
+      if (key.startsWith("fleet:")) {
+        // a fleet plan for a crew this user owns (priced by app/src/economy.ts fleetQuote)
+        const q = await fleetOrder(env.DB, user, key, cur)
+        if (!q.ok) return reply(409, { error: q.why, code: "cannot_buy" })
+        p = { name: q.name, price: { [cur]: q.amount } }
+      } else {
+        p = E.product(key)
+        if (!p) return reply(400, { error: "Unknown product", code: "bad_product" })
+        const { data } = await readWallet(env, user.id)
+        const can = E.canBuy(data.w, key, Date.now())
+        if (!can.ok) return reply(409, { error: can.why, code: "cannot_buy" })
+      }
       const mode = checkoutModes(env)[cur]
       if (!mode) return reply(503, { error: cur === "INR" ? "Payments in rupees aren't open yet." : "Payments in dollars aren't open yet. You can pay in rupees with an international card.", code: "payments_closed" })
       const amount = Math.round(p.price[cur] * 100) // paise or cents
@@ -224,4 +240,78 @@ async function razorpayWebhook(request, env) {
     if (pay) await grantOrMark(env, pay, payment.id, { amount: payment.amount, currency: payment.currency })
   }
   return reply(200, { ok: true })
+}
+
+/* ---------------- receipts ---------------- */
+export const billingName = (env) => String(env.NILOBS_BILLING_NAME || "Sea N Shore IT Solutions LLP")
+export const supportEmail = (env) => String(env.NILOBS_SUPPORT_EMAIL || "adityaps700@gmail.com")
+/** What a payment was for, in words. */
+export function itemName(key) {
+  const f = parseFleetKey(key)
+  if (f) {
+    const term = f.cycle === "annual" ? "1 year" : "1 month"
+    return f.action === "add" ? `Fleet plan: ${f.seats} more seat${f.seats === 1 ? "" : "s"}` : f.action === "renew" ? `Fleet plan renewal (${term})` : `Fleet plan: ${f.seats} seats, ${term}`
+  }
+  return E.product(key)?.name || "NilObs purchase"
+}
+async function receiptsOf(env, userId) {
+  const rows = (await env.DB.prepare("SELECT id, provider, product, currency, amount, payment_ref, created_at, paid_at FROM payments WHERE user_id = ? AND status = 'paid' ORDER BY paid_at DESC LIMIT 100").bind(userId).all()).results || []
+  return rows.map((r) => ({ id: r.id, at: r.paid_at || r.created_at, item: itemName(r.product), amount: r.amount / 100, currency: r.currency, provider: r.provider, ref: r.payment_ref || "" }))
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c])
+
+/** GET /receipt/<payment id>: a printable receipt, for the account that paid. Everyone else gets "not found". */
+export async function handleReceipt(request, env, user) {
+  const id = decodeURIComponent(new URL(request.url).pathname.split("/")[2] || "")
+  if (!user || !/^pay_[A-Za-z0-9]{6,40}$/.test(id)) return env.ASSETS.fetch(new Request(new URL("/404", request.url)))
+  await ensureWalletSchema(env.DB)
+  const r = await env.DB.prepare("SELECT * FROM payments WHERE id = ? AND user_id = ? AND status = 'paid'").bind(id, user.id).first()
+  if (!r) return env.ASSETS.fetch(new Request(new URL("/404", request.url)))
+  const nonce = crypto.randomUUID().replace(/-/g, "")
+  const when = new Date(r.paid_at || r.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" })
+  const money = E.fmtPrice(r.amount / 100, r.currency)
+  const addr = env.NILOBS_BILLING_ADDRESS ? `<div>${esc(env.NILOBS_BILLING_ADDRESS)}</div>` : "<div>India</div>"
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>Receipt ${esc(r.id)} · NilObs</title>
+<style>
+:root{--ink:#10233b;--mute:#5b6b80;--line:#d9e1ea;--accent:#0b6bcb}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:720px;margin:24px auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:32px}
+h1{font-size:26px;margin:0}.top{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:16px}
+.mute{color:var(--mute);font-size:13.5px}table{width:100%;border-collapse:collapse;margin:16px 0}td,th{text-align:left;padding:10px 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12.5px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.04em}.r{text-align:right}.total td{font-weight:700;font-size:17px;border-bottom:0}
+.paid{display:inline-block;background:#e6f6ee;color:#0a7a45;font-weight:700;border-radius:999px;padding:2px 10px;font-size:13px}
+[contenteditable]{outline:1px dashed #b9c6d4;border-radius:4px;padding:0 4px;min-width:120px;display:inline-block}
+.bar{max-width:720px;margin:16px auto 0;display:flex;gap:8px;justify-content:flex-end;padding:0 16px}
+button{height:40px;border-radius:10px;border:0;background:var(--accent);color:#fff;font-weight:600;padding:0 16px;font-size:14px;cursor:pointer}
+a{color:var(--accent)}
+@media (max-width:600px){main{margin:12px;padding:20px}}
+@media print{body{background:#fff}.bar,.hint{display:none}main{border:0;margin:0;max-width:none}[contenteditable]{outline:0}}
+</style></head><body>
+<div class="bar"><button type="button" id="print">Print or save as PDF</button></div>
+<main>
+<div class="top">
+<div><h1>Receipt</h1><div class="mute">Receipt no. ${esc(r.id)}</div><div class="mute">Paid ${esc(when)}</div></div>
+<div class="mute" style="text-align:right"><div style="color:var(--ink);font-weight:700">${esc(billingName(env))}</div><div>NilObs · nilobs.com</div>${addr}<div>${esc(supportEmail(env))}</div></div>
+</div>
+<div><b>Billed to</b><div>${esc(user.name || "")}${user.name ? " · " : ""}${esc(user.email || "")}</div>
+<div class="mute">Company or name to show: <span contenteditable="true" aria-label="Company or name to show on the receipt"></span> <span class="hint">(type here before printing)</span></div></div>
+<table><thead><tr><th>Item</th><th class="r">Amount</th></tr></thead><tbody>
+<tr><td>${esc(itemName(r.product))}</td><td class="r">${esc(money)}</td></tr>
+<tr class="total"><td>Total paid</td><td class="r">${esc(money)}</td></tr>
+</tbody></table>
+<p><span class="paid">Paid</span> <span class="mute">via ${r.provider === "razorpay" ? "Razorpay" : esc(r.provider)}${r.payment_ref ? ` · payment reference ${esc(r.payment_ref)}` : ""}</span></p>
+<p class="mute">No GST was charged on this payment. This is a payment receipt, not a tax invoice. Refunds follow the policy at <a href="https://nilobs.com/refunds">nilobs.com/refunds</a>. Questions: ${esc(supportEmail(env))}.</p>
+</main>
+<script nonce="${nonce}">document.getElementById("print").addEventListener("click",function(){window.print()})</script>
+</body></html>`
+  return new Response(html, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow",
+      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+      "referrer-policy": "no-referrer",
+    },
+  })
 }

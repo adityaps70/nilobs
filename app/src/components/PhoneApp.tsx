@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { CONTENT_NOTE } from "@/meta"
 import { AnimatePresence, motion } from "motion/react"
 import confetti from "canvas-confetti"
 
@@ -26,6 +27,8 @@ import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components
 import { RolePicker, RoleSelect } from "@/components/RolePicker"
 import { AccountChip, useAuth } from "@/auth"
 import { DailyDrill, DrillCard, LeagueCard, LeagueScreen, LiveCard, LiveScreen, PulseCard, PulseScreen, shareToPulse, type PulseShare } from "@/components/Live"
+import { CertScreen, CrewCertCards, CrewScreen } from "@/components/Crew"
+import { GuestBanner } from "@/app/AppGate"
 import { cleanRoleName, hasPreparedQuestions, isShore, roleOf, setCompany, setCurrentProfile, setCustomRole } from "@/roles"
 import { Chip, Label, Scroll, Section, TopBar } from "@/components/ui"
 import { BRAND, Logo, LogoMark } from "@/components/Brand"
@@ -243,13 +246,15 @@ export function PhoneApp({
     { k: "daily", label: "Today's drill", Icon: I.Target, target: "daily" },
     { k: "pulse", label: "Inspection pulse", Icon: I.Users, target: "pulse" },
     { k: "league", label: "Weekly league", Icon: I.Trophy, target: "league" },
+    { k: "crew", label: "Your crew", Icon: I.Ship, target: "crew" },
     { k: "stories", label: "Stories", Icon: I.Newspaper, target: "stories" },
     { k: "practice", label: "AI inspector", Icon: I.Mic, target: "practice" },
     { k: "photo", label: "Photo check", Icon: I.Camera, target: "photo" },
     { k: "bank", label: "Questions", Icon: I.Book, target: "bank" },
     { k: "brief", label: "Inspection brief", Icon: I.Clipboard, target: brief ? "brief" : "setup" },
     { k: "kit", label: "Ready kit", Icon: I.Briefcase, target: "kit" },
-    { k: "me", label: "Profile & progress", Icon: I.Award, target: "me" },
+    { k: "me", label: "Profile & progress", Icon: I.User, target: "me" },
+    { k: "cert", label: "Certificate", Icon: I.Award, target: "cert" },
     { k: "share", label: "Share a debrief", Icon: I.Plus, target: "share" },
     { k: "wallet", label: "Plans & credits", Icon: I.Wallet, target: "wallet" },
   ]
@@ -319,6 +324,8 @@ export function PhoneApp({
               {screen === "daily" && <DailyDrill rank={rank} go={go} brief={brief ?? null} briefDate={briefDate} openTopic={(t) => { setBankTopic(t); setBankMode("real"); go("bank") }} />}
               {screen === "pulse" && <PulseScreen go={go} openTopic={(t) => { setBankTopic(t); setBankMode("real"); go("bank") }} />}
               {screen === "league" && <LeagueScreen />}
+              {screen === "crew" && <CrewScreen go={go} />}
+              {screen === "cert" && <CertScreen go={go} rank={rank} />}
               {screen === "kit" && <KitScreen go={go} />}
               {screen === "me" && <MeScreen go={go} profile={profile} setProfile={setProfile} night={night} setNight={setNight} />}
               {screen === "share" && <Share night={night} />}
@@ -419,6 +426,7 @@ export function PhoneApp({
 
 /* ---------------- Onboarding ---------------- */
 function Onboard({ onDone, initialRank }: { onDone: (p: Profile) => void; initialRank?: string }) {
+  const auth = useAuth()
   const [rank, setRank] = useState<string | null>(initialRank && RANKS.includes(initialRank) ? initialRank : null)
   const [roleName, setRoleName] = useState("")
   const [ship, setShip] = useState("Product")
@@ -433,6 +441,12 @@ function Onboard({ onDone, initialRank }: { onDone: (p: Profile) => void; initia
         <h2 className="display text-[30px] leading-[1.05] font-bold">Welcome aboard</h2>
         <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} For every rank on board and the company's people ashore. Pick your role: no ship details needed.</p>
       </div>
+      {auth.status === "out" && (
+        <button type="button" onClick={() => auth.prompt("Welcome back. Sign in to pick up where you left off")} className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left text-[13.5px]">
+          <span><b className="font-semibold">Already use NilObs?</b> <span className="text-mute">Sign in to bring your progress to this device.</span></span>
+          <span className="shrink-0 font-semibold text-primary">Sign in</span>
+        </button>
+      )}
       <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5">
         <IconTile icon={I.Coin} color="teal" size={40} />
         <span className="flex flex-col">
@@ -566,6 +580,7 @@ function Today(p: {
 
       <WalletNudge onOpen={() => p.go("wallet")} />
 
+      <GuestBanner />
       <DrillCard rank={p.rank} go={p.go} brief={p.brief ?? null} briefDate={p.briefDate} />
 
       <MissionsCard go={p.go} />
@@ -578,6 +593,8 @@ function Today(p: {
         <LeagueCard go={p.go} />
         <PulseCard go={p.go} />
       </div>
+
+      <CrewCertCards go={p.go} rank={p.rank} />
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {actions.map((a, i) => (
@@ -936,7 +953,7 @@ function NoPreparedInterview({ rank }: { rank: string }) {
         <span className="flex size-12 items-center justify-center rounded-2xl bg-hero-track"><I.Mic size={24} /></span>
         <span className="display text-[22px] leading-tight font-bold">Interview practice for a {RANK_NAMES[rank] || rank}</span>
         <span className="text-[14px] leading-relaxed text-hero-muted">
-          The AI inspector writes questions for your role{isShore(rank) ? ", the way an inspector, a vetting team or an auditor would ask the company," : ""} grades each answer and suggests a stronger one. Sign in with Google above to start. Until then, flashcards and Spot the observation are free.
+          The AI inspector writes questions for your role{isShore(rank) ? ", the way an inspector, a vetting team or an auditor would ask the company," : ""} grades each answer and suggests a stronger one. Sign in above to start. Until then, flashcards and Spot the observation are free.
         </span>
       </div>
     </Scroll>
@@ -1298,6 +1315,7 @@ function Bank(p: {
           )
         })}
         {!list.length && <p className="pt-6 text-center text-[13px] text-mute">Nothing matches. Clear a filter or try another word.</p>}
+        <p className="text-center text-[11.5px] leading-snug text-mute">{CONTENT_NOTE} <a href="/about" target="_blank" rel="noreferrer" className="underline underline-offset-2">About NilObs</a></p>
       </Scroll>
     </>
   )

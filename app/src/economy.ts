@@ -725,3 +725,76 @@ export function grantPurchase(state: WalletState, key: string, cur: Currency, no
   s.paid += 1
   return { ok: true, state: s }
 }
+
+/* ---------------- what credits buy ---------------- */
+/** Roughly what `n` credits pay for, in the app's own units (for price lists and the buy buttons). */
+export function creditsBuy(n: number) {
+  const f = (c: number) => Math.floor(Math.max(0, n) / c)
+  return { quick: f(COSTS.askQuick), deep: f(COSTS.askDeep), photos: f(COSTS.photo), interviews: f(COSTS.interview), briefs: f(COSTS.brief) }
+}
+/** One short line: "≈ 100 deep answers, or 133 photo checks, or 50 AI inspector sessions". */
+export function creditsBuyLine(n: number) {
+  const b = creditsBuy(n)
+  const k = (x: number) => x.toLocaleString("en-IN")
+  return `≈ ${k(b.deep)} deep answers, or ${k(b.photos)} photo checks, or ${k(b.interviews)} AI inspector sessions`
+}
+
+/* ---------------- fleet plans ---------------- */
+// A company buys seats for its crew: each seat is a Watchkeeper plan for whoever holds it, for as long as the
+// fleet is paid up. Prices are per seat; a year is ten months' price, like the other plans.
+export const FLEET = {
+  min: 5,
+  max: 300,
+  plan: "watch" as PlanId,
+  price: { INR: { monthly: 399, annual: 3990 }, USD: { monthly: 5, annual: 50 } } as Record<Currency, Record<Cycle, number>>,
+}
+export const fleetTerm = (cycle: Cycle) => termFrom(0, cycle)
+export type FleetAction = "new" | "renew" | "add"
+export interface FleetNow { seats: number; until: number; cycle: Cycle }
+/**
+ * What a fleet purchase costs and does. `now` and the fleet's current state decide it:
+ * - new: N seats for a month or a year (the fleet isn't paid up now)
+ * - renew: the same seats for another month or year, starting when the current period ends
+ * - add: more seats to the end of the current period, at the monthly price per month left (a year's price at most)
+ */
+export function fleetQuote(action: FleetAction, seats: number, cycle: Cycle, cur: Currency, fleet: FleetNow | null, now: number):
+  { ok: true; amount: number; seats: number; until: number; name: string } | { ok: false; why: string } {
+  const active = !!fleet && fleet.until > now && fleet.seats > 0
+  const n = Math.round(Number(seats))
+  const per = FLEET.price[cur]
+  if (action === "new") {
+    if (active) return { ok: false, why: "This fleet is already paid up. Renew it or add seats." }
+    if (!(n >= FLEET.min && n <= FLEET.max)) return { ok: false, why: `Pick between ${FLEET.min} and ${FLEET.max} seats.` }
+    return { ok: true, amount: n * per[cycle], seats: n, until: now + fleetTerm(cycle), name: `Fleet plan: ${n} seats, ${cycle === "annual" ? "1 year" : "1 month"}` }
+  }
+  if (!active) return { ok: false, why: "This fleet isn't paid up. Start a new period instead." }
+  if (action === "renew") {
+    return { ok: true, amount: fleet!.seats * per[cycle], seats: fleet!.seats, until: fleet!.until + fleetTerm(cycle), name: `Fleet plan renewal: ${fleet!.seats} seats, ${cycle === "annual" ? "1 year" : "1 month"}` }
+  }
+  if (!(n >= 1 && fleet!.seats + n <= FLEET.max)) return { ok: false, why: `A fleet can have up to ${FLEET.max} seats.` }
+  const months = Math.min(YEAR_CYCLES, Math.max(1, Math.ceil((fleet!.until - now) / (CYCLE_DAYS * DAY))))
+  const each = months >= YEAR_CYCLES ? per.annual : Math.min(per.annual, months * per.monthly)
+  return { ok: true, amount: n * each, seats: fleet!.seats + n, until: fleet!.until, name: `Fleet plan: ${n} more seat${n === 1 ? "" : "s"} to ${dayOf(fleet!.until)}` }
+}
+
+/**
+ * A fleet seat: Watchkeeper until `until`, paid by the company. Someone already on Watchkeeper has it extended;
+ * someone on Command keeps Command (nothing changes). Returns ok: false when nothing changed.
+ */
+export function grantSeat(state: WalletState, until: number, label: string, now: number): { ok: boolean; state: WalletState } {
+  const s = tick(state, now)
+  if (until <= now || PLAN_RANK[s.plan.id] > PLAN_RANK.watch) return { ok: false, state }
+  const plan = PLANS.watch
+  if (s.plan.id === "watch") {
+    const end = paidUntil(s) ?? now
+    if (until <= end) return { ok: false, state }
+    s.plan = { ...s.plan, term: until, cancelAt: until, next: null }
+    log(s, { at: now, delta: 0, label: `${label}: Watchkeeper extended to ${dayOf(until)}`, kind: "grant" })
+    return { ok: true, state: s }
+  }
+  const renews = now + CYCLE_DAYS * DAY
+  s.plan = { id: "watch", cycle: "monthly", started: now, renews, term: until, cancelAt: until, next: null }
+  addBucket(s, "monthly", plan.credits, `${plan.name} plan: monthly credits`, renews, now)
+  log(s, { at: now, delta: plan.credits, label: `${label}: Watchkeeper until ${dayOf(until)}, ${plan.credits} credits now and every 30 days`, kind: "grant" })
+  return { ok: true, state: s }
+}

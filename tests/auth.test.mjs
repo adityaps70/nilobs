@@ -37,8 +37,9 @@ async function signIn(env, claims = { sub: "g-1", email: "officer@example.com", 
 
 test("config tells the app whether sign-in is on", async () => {
   const env = freshEnv()
-  assert.deepEqual(await (await worker.fetch(req("/api/auth/config"), env)).json(), { google: CLIENT })
-  assert.deepEqual(await (await worker.fetch(req("/api/auth/config"), { ASSETS: env.ASSETS })).json(), { google: null })
+  assert.deepEqual(await (await worker.fetch(req("/api/auth/config"), env)).json(), { google: CLIENT, email: false })
+  assert.deepEqual(await (await worker.fetch(req("/api/auth/config"), { ...env, EMAIL: { send: async () => {} } })).json(), { google: CLIENT, email: true })
+  assert.deepEqual(await (await worker.fetch(req("/api/auth/config"), { ASSETS: env.ASSETS })).json(), { google: null, email: false })
   const health = await (await worker.fetch(req("/api/health"), env)).json()
   assert.equal(health.signin, true)
 })

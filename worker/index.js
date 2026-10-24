@@ -2,16 +2,18 @@ import { handleAi } from "./ai.js"
 import { handleVoice } from "./voice.js"
 import { authEnabled, getSession, handleAuth } from "./auth.js"
 import { handleWallet, meter } from "./wallet.js"
-import { handlePay } from "./pay.js"
+import { handlePay, handleReceipt } from "./pay.js"
 import { handleAdmin } from "./admin.js"
-import { handleFeed, runFeed } from "./feed.js"
+import { dueSources, handleFeed, runFeed } from "./feed.js"
 import { handlePush, runPush } from "./push.js"
 import { handlePulse, runPulse } from "./pulse.js"
 import { handleLeague } from "./league.js"
+import { handleCrews } from "./crews.js"
+import { handleCert, handleCertPage } from "./certs.js"
 import { ensureLiveSchema } from "./live.js"
 import { limited, originAllowed, reply } from "./guard.js"
 
-const AUTH_ROUTES = ["/api/auth/config", "/api/auth/google", "/api/auth/logout", "/api/me", "/api/state"]
+const AUTH_ROUTES = ["/api/auth/config", "/api/auth/google", "/api/auth/email/start", "/api/auth/email/verify", "/api/auth/logout", "/api/me", "/api/state"]
 
 export default {
   async fetch(request, env, ctx) {
@@ -31,6 +33,20 @@ export default {
     }
     // The owner's analytics (only for ADMIN_EMAILS; everyone else gets "not found")
     if (url.pathname === "/admin" || url.pathname === "/admin/" || url.pathname.startsWith("/api/admin/")) return handleAdmin(request, env)
+    // Short invite links for crews: nilobs.com/join/ABCD2345 opens the app on the crew's join screen
+    if (url.pathname.startsWith("/join/")) {
+      const code = url.pathname.slice(6).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12)
+      return Response.redirect(`${url.origin}/#app/crew/${code}`, 302)
+    }
+    // Certificates: public, printable, and how anyone checks one is real
+    if (url.pathname.startsWith("/c/")) return handleCertPage(request, env)
+    // The Android app (Play Store) proves it belongs to this site with Digital Asset Links
+    if (url.pathname === "/.well-known/assetlinks.json" && env.ANDROID_PACKAGE && env.ANDROID_CERT_SHA256) {
+      const fingerprints = String(env.ANDROID_CERT_SHA256).split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)
+      return new Response(JSON.stringify([{ relation: ["delegate_permission/common.handle_all_urls"], target: { namespace: "android_app", package_name: String(env.ANDROID_PACKAGE), sha256_cert_fingerprints: fingerprints } }]), {
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=3600", "access-control-allow-origin": "*" },
+      })
+    }
     // (Cloudflare's static assets already serve public/privacy.html at /privacy)
     if (AUTH_ROUTES.includes(url.pathname)) return handleAuth(request, env)
     // Razorpay's payment notifications (signed by Razorpay, no session)
@@ -59,6 +75,20 @@ export default {
       const m = meter(env, s.user.id, isAi ? "ai" : "voice")
       return isAi ? handleAi(request, env, fetch, m, ctx) : handleVoice(request, env, fetch, globalThis.caches?.default, m)
     }
+    // Receipts for payments (the account that paid only)
+    if (url.pathname.startsWith("/receipt/")) {
+      if (!authEnabled(env)) return env.ASSETS.fetch(request)
+      const s = await getSession(request, env)
+      return handleReceipt(request, env, s?.user || null)
+    }
+    // Crews and fleet plans, and certificates
+    if (url.pathname === "/api/crews" || url.pathname.startsWith("/api/crews/") || url.pathname === "/api/cert") {
+      if (!authEnabled(env)) return reply(404, { error: "Accounts aren't set up on this server" })
+      if (request.method !== "GET" && !originAllowed(request, env)) return reply(403, { error: "Origin not allowed" })
+      if (await limited(request, env, { name: "live", binding: null, perMinute: Number(env.NILOBS_LIVE_PER_MINUTE || 60) })) return reply(429, { error: "Too many requests. Try again in a minute." })
+      const s = await getSession(request, env)
+      return url.pathname === "/api/cert" ? handleCert(request, env, s?.user || null) : handleCrews(request, env, s?.user || null)
+    }
     // The live features: the industry feed (public), reminders, the inspection pulse and weekly leagues
     if (url.pathname === "/api/feed") return handleFeed(request, env, ctx)
     if (url.pathname.startsWith("/api/push/") || url.pathname === "/api/pulse" || url.pathname === "/api/league") {
@@ -78,19 +108,19 @@ export default {
   },
 
   // Cron (wrangler.jsonc → triggers): every 15 minutes send the reminders that are due, and read the industry
-  // sources whenever the last read is more than about 3 hours old (so a new deploy or a missed run catches up by
-  // itself). Debriefs the AI couldn't check earlier are retried each time.
+  // sources that are due (a few per run, oldest first: each is read again about every 3 hours, a failing one
+  // every 12). Debriefs the AI couldn't check earlier are retried each time.
   async scheduled(event, env, ctx) {
     if (!env.DB) return
     const now = event?.scheduledTime || Date.now()
-    let lastFeed = 0
+    let due = true
     try {
       await ensureLiveSchema(env.DB)
-      lastFeed = Number((await env.DB.prepare("SELECT MAX(last_run) AS t FROM feed_sources").first())?.t) || 0
+      due = dueSources((await env.DB.prepare("SELECT * FROM feed_sources").all()).results || [], now).length > 0
     } catch {
       /* first run: no table yet */
     }
-    const feedTime = event?.cron === "feed" || now - lastFeed > 165 * 60000
+    const feedTime = event?.cron === "feed" || due
     const jobs = [
       runPush(env, now, fetch, feedTime ? 15 : 30).catch((e) => console.error("push run", e?.message || e)),
       runPulse(env).catch((e) => console.error("pulse run", e?.message || e)),

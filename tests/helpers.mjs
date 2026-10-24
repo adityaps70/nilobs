@@ -3,6 +3,8 @@ import worker from "../worker/index.js"
 import { resetSchemaFlag } from "../worker/auth.js"
 import { resetWalletSchemaFlag } from "../worker/wallet.js"
 import { resetLiveSchemaFlag } from "../worker/live.js"
+import { resetCrewSchemaFlag } from "../worker/crews.js"
+import { resetCertSchemaFlag } from "../worker/certs.js"
 import { fakeD1, fakeGoogle } from "./fakes.mjs"
 
 export const SITE = "https://nilobs.com"
@@ -40,6 +42,8 @@ export function freshEnv(extra = {}) {
   resetSchemaFlag()
   resetWalletSchemaFlag()
   resetLiveSchemaFlag()
+  resetCrewSchemaFlag()
+  resetCertSchemaFlag()
   return {
     DB: fakeD1(), GOOGLE_CLIENT_ID: CLIENT, ANTHROPIC_API_KEY: "k", RUMIK_API_KEY: "r",
     ASSETS: { fetch: async () => new Response("site") },

@@ -259,6 +259,7 @@ function writeRaw(k: string, v: string | null) {
 
 /** What a purchase gave, for the sheet's "done" message. */
 function boughtMessage(key: string): string {
+  if (key.startsWith("fleet:")) return "Fleet plan paid. Seats are live: your crew get Watchkeeper the next time they open NilObs."
   const p = product(key)
   if (!p) return "Done."
   if (p.kind === "topup") return `${p.credits.toLocaleString("en-IN")} credits added. Top-ups never expire.`
@@ -474,6 +475,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return null
       }
       const rule = ITEMS[item.kind]
+      if (!user && HOSTED && auth.status === "out") {
+        // a guest on nilobs.com: credits belong to accounts
+        auth.prompt(item.kind === "story" || item.kind === "deck" ? "Sign in to unlock this" : "Sign in to use the AI")
+        return null
+      }
       if (user) {
         if (balanceOf(cur, t) < cost) {
           short(cost, balanceOf(cur, t))
@@ -554,9 +560,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         if (user) send("/api/wallet/claims", c).catch(() => {})
       },
       buy: async (key) => {
+        const fleet = key.startsWith("fleet:") // seats for a crew (worker/crews.js), priced by the server
         const p = product(key)
-        if (!p) return { ok: false, error: "Unknown product" }
-        if (!user) {
+        if (!p && !fleet) return { ok: false, error: "Unknown product" }
+        if (!user && fleet) return { ok: false, error: "Sign in first." }
+        if (!user && p) {
           // this browser's practice wallet: nothing is charged
           const r = grantPurchase(ref.current, key, currency, Date.now(), `${fmtPrice(p.price[currency], currency)} (prototype, no charge)`)
           if (!r.ok) return { ok: false, error: r.why }
@@ -635,7 +643,14 @@ export function useWallet() {
 
 export function CreditPill({ onClick, className }: { onClick?: () => void; className?: string }) {
   const w = useWallet()
+  const auth = useAuth()
   const low = w.balance < 10
+  if (HOSTED && auth.status === "out")
+    return (
+      <button type="button" aria-label={`Sign in to get ${WELCOME_CREDITS} free credits`} onClick={() => auth.prompt(`Sign in to get ${WELCOME_CREDITS} free credits`)} className={cn("tnum flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-dashed border-line bg-surface px-3 font-mono text-[12px] font-semibold whitespace-nowrap text-mute", className)}>
+        <I.Coin size={15} /> {WELCOME_CREDITS}
+      </button>
+    )
   return (
     <button
       type="button"

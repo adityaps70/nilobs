@@ -8,6 +8,8 @@
 // Routes (wired in worker/index.js):
 //   GET    /api/auth/config   → { google: client id | null }
 //   POST   /api/auth/google   { credential } → { user }   (sets the session cookie)
+//   POST   /api/auth/email/start  { email } → emails a 6-digit code (when an email sender is set up)
+//   POST   /api/auth/email/verify { email, code } → { user }   (sets the session cookie)
 //   POST   /api/auth/logout
 //   GET    /api/me            → { user } | 401
 //   DELETE /api/me            deletes the account, its sessions, saved state, wallet, reminders and shared
@@ -17,6 +19,9 @@
 import { limited, originAllowed, reply } from "./guard.js"
 import { ensureWalletSchema, startKey } from "./wallet.js"
 import { ensureLiveSchema } from "./live.js"
+import { emailReady, sendEmail } from "./email.js"
+import { crewsOnDelete } from "./crews.js"
+import { ensureCertSchema } from "./certs.js"
 
 const GOOGLE_CERTS = "https://www.googleapis.com/oauth2/v3/certs"
 const ISSUERS = ["accounts.google.com", "https://accounts.google.com"]
@@ -78,6 +83,9 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id)",
   "CREATE TABLE IF NOT EXISTS user_state (user_id TEXT PRIMARY KEY, version INTEGER NOT NULL, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+  // sign-in by email: one live code per address (hashed), with tries and a send count per hour
+  "CREATE TABLE IF NOT EXISTS email_codes (email TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0, sent_at INTEGER NOT NULL, sends INTEGER NOT NULL DEFAULT 1, window_start INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS users_email ON users (email COLLATE NOCASE)",
 ]
 let ready = null
 /** Creates the tables on first use (cheap: once per Worker instance). migrations/0001_init.sql has the same schema. */
@@ -135,7 +143,7 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
   const path = url.pathname
   const method = request.method
 
-  if (path === "/api/auth/config") return reply(200, { google: authEnabled(env) ? env.GOOGLE_CLIENT_ID : null })
+  if (path === "/api/auth/config") return reply(200, { google: authEnabled(env) ? env.GOOGLE_CLIENT_ID : null, email: authEnabled(env) && emailReady(env) })
   if (!authEnabled(env)) return reply(404, { error: "Sign-in is not set up on this server" })
   if (method !== "GET" && !originAllowed(request, env)) return reply(403, { error: "Origin not allowed" })
   await ensureSchema(env.DB)
@@ -159,6 +167,14 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
     const name = String(claims.name || claims.given_name || "").slice(0, 120)
     const picture = /^https:\/\//.test(claims.picture || "") ? String(claims.picture).slice(0, 500) : ""
     let user = await env.DB.prepare("SELECT id, email, name, picture FROM users WHERE google_sub = ?").bind(String(claims.sub)).first()
+    if (!user && email && claims.email_verified !== false) {
+      // an account made with an email code for this same address becomes this Google account's
+      const byEmail = await env.DB.prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE AND google_sub LIKE 'email:%' ORDER BY created_at LIMIT 1").bind(email).first()
+      if (byEmail) {
+        await env.DB.prepare("UPDATE users SET google_sub = ? WHERE id = ?").bind(String(claims.sub), byEmail.id).run()
+        user = await env.DB.prepare("SELECT id, email, name, picture FROM users WHERE id = ?").bind(byEmail.id).first()
+      }
+    }
     if (user) {
       await env.DB.prepare("UPDATE users SET email = ?, name = ?, picture = ?, last_seen = ? WHERE id = ?").bind(email, name, picture, now, user.id).run()
       user = { ...user, email, name, picture }
@@ -167,14 +183,11 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
       await env.DB.prepare("INSERT INTO users (id, google_sub, email, name, picture, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(user.id, String(claims.sub), email, name, picture, now, now).run()
     }
-    const token = randomToken()
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND expires_at < ?").bind(user.id, now),
-      env.DB.prepare("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)").bind(await sha256(token), user.id, now, now + SESSION_DAYS * DAY),
-    ])
-    const state = await env.DB.prepare("SELECT version FROM user_state WHERE user_id = ?").bind(user.id).first()
-    return withCookie(reply(200, { user: publicUser(user), stateVersion: state?.version ?? 0 }), cookieHeader(request, token, SESSION_DAYS * 86400))
+    return startSession(request, env, user, now)
   }
+
+  if (path === "/api/auth/email/start" && method === "POST") return emailStart(request, env, now)
+  if (path === "/api/auth/email/verify" && method === "POST") return emailVerify(request, env, now)
 
   if (path === "/api/auth/logout" && method === "POST") {
     const s = await getSession(request, env, now)
@@ -197,6 +210,8 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
   if (path === "/api/me" && method === "DELETE") {
     await ensureWalletSchema(env.DB)
     await ensureLiveSchema(env.DB)
+    await ensureCertSchema(env.DB)
+    const crewSteps = await crewsOnDelete(env.DB, s.user.id, now)
     const row = await env.DB.prepare("SELECT google_sub FROM users WHERE id = ?").bind(s.user.id).first()
     await env.DB.batch([
       // signing up again with the same Google account doesn't bring back the free starting credits
@@ -207,6 +222,8 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
       env.DB.prepare("DELETE FROM users WHERE id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM push_subs WHERE user_id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM debriefs WHERE user_id = ?").bind(s.user.id),
+      env.DB.prepare("DELETE FROM certs WHERE user_id = ?").bind(s.user.id),
+      ...crewSteps,
     ])
     return withCookie(reply(200, { ok: true }), cookieHeader(request, "", 0))
   }
@@ -242,4 +259,89 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
   }
 
   return reply(404, { error: "Not found" })
+}
+
+/* ---------------- sessions ---------------- */
+async function startSession(request, env, user, now) {
+  const token = randomToken()
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND expires_at < ?").bind(user.id, now),
+    env.DB.prepare("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)").bind(await sha256(token), user.id, now, now + SESSION_DAYS * DAY),
+  ])
+  const state = await env.DB.prepare("SELECT version FROM user_state WHERE user_id = ?").bind(user.id).first()
+  return withCookie(reply(200, { user: publicUser(user), stateVersion: state?.version ?? 0 }), cookieHeader(request, token, SESSION_DAYS * 86400))
+}
+
+/* ---------------- sign in with an email code ---------------- */
+const CODE_MINUTES = 10
+const MAX_TRIES = 5
+const SENDS_PER_HOUR = 5
+const RESEND_SECONDS = 30
+export const cleanEmail = (s) => {
+  const e = String(s || "").trim().toLowerCase()
+  return e.length <= 254 && /^[a-z0-9._%+'-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(e) && !e.includes("..") ? e : ""
+}
+const readBody = async (request) => {
+  try {
+    return await request.json()
+  } catch {
+    return null
+  }
+}
+
+async function emailStart(request, env, now) {
+  if (!emailReady(env)) return reply(404, { error: "Sign-in by email isn't set up yet. Use Google for now." })
+  if (await limited(request, env, { name: "auth", binding: env.AUTH_LIMIT, perMinute: Number(env.NILOBS_AUTH_PER_MINUTE || 10) })) return reply(429, { error: "Too many sign-in attempts. Try again in a minute." })
+  const body = await readBody(request)
+  const email = cleanEmail(body?.email)
+  if (!email) return reply(400, { error: "That doesn't look like an email address." })
+  const row = await env.DB.prepare("SELECT * FROM email_codes WHERE email = ?").bind(email).first()
+  const fresh = !row || now - row.window_start > 3600000
+  if (row && now - row.sent_at < RESEND_SECONDS * 1000) return reply(429, { error: "A code is on its way. Wait half a minute before asking for another." })
+  if (row && !fresh && row.sends >= SENDS_PER_HOUR) return reply(429, { error: "Too many codes for this address. Try again in an hour, or use Google." })
+  const n = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000
+  const code = String(n).padStart(6, "0")
+  const hash = await sha256(`${email}:${code}`)
+  const sends = fresh ? 1 : row.sends + 1
+  const windowStart = fresh ? now : row.window_start
+  await env.DB.prepare("INSERT INTO email_codes (email, code_hash, expires_at, tries, sent_at, sends, window_start) VALUES (?, ?, ?, 0, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, tries = 0, sent_at = excluded.sent_at, sends = excluded.sends, window_start = excluded.window_start")
+    .bind(email, hash, now + CODE_MINUTES * 60000, now, sends, windowStart).run()
+  try {
+    await sendEmail(env, {
+      to: email,
+      subject: `${code} is your NilObs sign-in code`,
+      text: `Your NilObs sign-in code is ${code}\n\nIt works for ${CODE_MINUTES} minutes. If you didn't ask for it, ignore this email: nobody can sign in without the code.\n\nNilObs · nilobs.com`,
+      html: `<div style="font:16px/1.5 system-ui,sans-serif;color:#10233b;max-width:480px"><p>Your NilObs sign-in code is</p><p style="font-size:32px;font-weight:700;letter-spacing:6px;margin:8px 0">${code}</p><p>It works for ${CODE_MINUTES} minutes. If you didn't ask for it, ignore this email: nobody can sign in without the code.</p><p style="color:#5b6b80;font-size:13px">NilObs · nilobs.com</p></div>`,
+    })
+  } catch (e) {
+    console.error("email send", e?.code || "", e?.message || e)
+    await env.DB.prepare("UPDATE email_codes SET sent_at = 0 WHERE email = ?").bind(email).run()
+    return reply(502, { error: "Couldn't send the email just now. Try again, or use Google." })
+  }
+  return reply(200, { ok: true, minutes: CODE_MINUTES })
+}
+
+async function emailVerify(request, env, now) {
+  if (!emailReady(env)) return reply(404, { error: "Sign-in by email isn't set up yet. Use Google for now." })
+  if (await limited(request, env, { name: "auth", binding: env.AUTH_LIMIT, perMinute: Number(env.NILOBS_AUTH_PER_MINUTE || 10) })) return reply(429, { error: "Too many sign-in attempts. Try again in a minute." })
+  const body = await readBody(request)
+  const email = cleanEmail(body?.email)
+  const code = String(body?.code || "").replace(/\D/g, "")
+  if (!email || code.length !== 6) return reply(400, { error: "Enter the 6-digit code from the email." })
+  const row = await env.DB.prepare("SELECT * FROM email_codes WHERE email = ?").bind(email).first()
+  if (!row || row.expires_at < now) return reply(400, { error: "That code has expired. Ask for a new one.", code: "expired" })
+  if (row.tries >= MAX_TRIES) return reply(429, { error: "Too many wrong codes. Ask for a new one.", code: "tries" })
+  if ((await sha256(`${email}:${code}`)) !== row.code_hash) {
+    await env.DB.prepare("UPDATE email_codes SET tries = tries + 1 WHERE email = ?").bind(email).run()
+    return reply(400, { error: row.tries + 1 >= MAX_TRIES ? "That code isn't right. Ask for a new one." : "That code isn't right. Check the email and try again.", code: "wrong" })
+  }
+  await env.DB.prepare("DELETE FROM email_codes WHERE email = ?").bind(email).run()
+  // the same person whether they first came with Google or by email: one account per address
+  let user = await env.DB.prepare("SELECT id, email, name, picture FROM users WHERE email = ? COLLATE NOCASE ORDER BY created_at LIMIT 1").bind(email).first()
+  if (user) await env.DB.prepare("UPDATE users SET last_seen = ? WHERE id = ?").bind(now, user.id).run()
+  else {
+    user = { id: crypto.randomUUID(), email, name: "", picture: "" }
+    await env.DB.prepare("INSERT INTO users (id, google_sub, email, name, picture, created_at, last_seen) VALUES (?, ?, ?, '', '', ?, ?)").bind(user.id, `email:${await sha256(email)}`, email, now, now).run()
+  }
+  return startSession(request, env, user, now)
 }

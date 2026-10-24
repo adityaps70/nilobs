@@ -501,11 +501,15 @@ th button[aria-sort] { color: var(--ink); }
         tile("Drills done today", n(L.drillToday), plural(L.drillPeople, "person has", "people have") + " done one"),
         tile("Reminders on", n(L.reminders.people), plural(L.reminders.browsers, "browser")),
         tile("Debriefs this week", n(L.pulse.week), "published in the pulse"),
-        tile("Feed updates, 24 h", n(L.feed.day), n(L.feed.live) + " live · " + n(L.feed.waiting) + " waiting for the AI")))
+        tile("Feed updates, 24 h", n(L.feed.day), n(L.feed.live) + " live · " + n(L.feed.waiting) + " waiting for the AI"),
+        L.crews ? tile("Crews", n(L.crews.n), plural(L.crews.members, "member")) : null,
+        L.crews ? tile("Fleet plans", n(L.crews.fleets), plural(L.crews.seats, "paid seat")) : null,
+        L.certs != null ? tile("Certificates", n(L.certs), "issued") : null,
+        L.emailAccounts != null ? tile("Email sign-ups", n(L.emailAccounts), "accounts without Google") : null))
     box.appendChild(head)
     var ok = function (s) { return s.lastOk && (!s.lastRun || s.lastOk >= s.lastRun) }
     box.appendChild(h("section", { class: "card" },
-      h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Feed sources" }), h("div", { class: "note", text: "Read every 3 hours. A broken source shows its last error." }))),
+      h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Feed sources" }), h("div", { class: "note", text: "Each source is read about every 3 hours (a failing one every 12). A broken source shows its last error." }))),
       table("Feed sources", ["Source", "Status", "Last read", "Items found", "Live, 7 days"], L.sources.map(function (s) {
         return [s.name + (s.official ? " (official)" : ""), s.lastRun ? (ok(s) ? "Working" : "Failing: " + (s.error || "no items")) : "Not read yet", s.lastRun ? ago(s.lastRun) : "—", n(s.found), n(s.live7)]
       }), [0, 0, 0, 1, 1])))

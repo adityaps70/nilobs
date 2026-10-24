@@ -10,6 +10,8 @@ import { ensureSchema, getSession } from "./auth.js"
 import { ensureWalletSchema } from "./wallet.js"
 import { limited, originAllowed, reply } from "./guard.js"
 import { ensureLiveSchema } from "./live.js"
+import { ensureCrewSchema } from "./crews.js"
+import { ensureCertSchema } from "./certs.js"
 import { SOURCES } from "./feed.js"
 import { ROLES, ROLE_GROUPS } from "../app/src/roles.ts"
 import ADMIN_PAGE from "./admin-page.js"
@@ -357,6 +359,12 @@ async function liveStats(db, now, list) {
   const email = new Map(list.map((u) => [u.id, u.email]))
   const deb = await all("SELECT id, user_id, created_at, status, ship, role, pub, topics FROM debriefs ORDER BY created_at DESC LIMIT 30")
   const week = await one("SELECT COUNT(*) AS n FROM debriefs WHERE status = 'live' AND created_at > ?", now - 7 * DAY)
+  await ensureCrewSchema(db)
+  await ensureCertSchema(db)
+  const crews = await one("SELECT COUNT(*) AS n, SUM(CASE WHEN seats > 0 AND paid_until > ? THEN 1 ELSE 0 END) AS fleets, SUM(CASE WHEN seats > 0 AND paid_until > ? THEN seats ELSE 0 END) AS seats FROM crews WHERE owner_id NOT LIKE 'deleted%'", now, now)
+  const members = await one("SELECT COUNT(*) AS n FROM crew_members WHERE left_at IS NULL")
+  const certs = await one("SELECT COUNT(*) AS n FROM certs")
+  const viaEmail = await one("SELECT COUNT(*) AS n FROM users WHERE google_sub LIKE 'email:%'")
   const today = utcDay(now)
   return {
     sources: SOURCES.map((s) => {
@@ -365,6 +373,9 @@ async function liveStats(db, now, list) {
     }),
     feed: { live: Number(feed.live) || 0, day: Number(feed.day) || 0, waiting: Number(feed.waiting) || 0 },
     reminders: { browsers: Number(push.n) || 0, people: Number(push.people) || 0 },
+    crews: { n: Number(crews.n) || 0, members: Number(members.n) || 0, fleets: Number(crews.fleets) || 0, seats: Number(crews.seats) || 0 },
+    certs: Number(certs.n) || 0,
+    emailAccounts: Number(viaEmail.n) || 0,
     drillToday: list.filter((u) => u.drillDay === today).length,
     drillPeople: list.filter((u) => u.drills > 0).length,
     pulse: {

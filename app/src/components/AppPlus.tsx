@@ -1,5 +1,6 @@
 // New app screens built on the fleet data: Train (decks + spaced repetition), Spot the observation,
 // Observation radar, Ready kit and Progress, plus the habit widgets used on Today.
+import { CONTENT_NOTE } from "@/meta"
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SVGProps } from "react"
 import { AccountCard } from "@/auth"
 import { AnimatePresence, motion } from "motion/react"
@@ -309,6 +310,7 @@ export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppS
           <CostTag cost={COSTS.interview} className="text-mute" />
         </button>
         <p className="text-center text-[11.5px] leading-snug text-mute">Answers come from officers' and superintendents' notes. Check them against your SMS and the current rules.</p>
+        <p className="text-center text-[11.5px] leading-snug text-mute">{CONTENT_NOTE} <a href="/about" target="_blank" rel="noreferrer" className="underline underline-offset-2">About NilObs</a></p>
       </Scroll>
     </>
   )
@@ -956,6 +958,14 @@ export function MeScreen({ go, profile, setProfile, night, setNight }: { go: (s:
       <Scroll className="gap-4">
         <AccountCard />
         <ReminderCard />
+        <div className="grid grid-cols-3 gap-2">
+          {([["Certificate", I.Award, () => go("cert")], ["Your crew", I.Ship, () => go("crew")], ["About NilObs", I.Info, () => window.open("/about", "_blank", "noopener")]] as const).map(([l, Ic, f]) => (
+            <button key={l} type="button" onClick={f} className="flex flex-col items-start gap-1.5 rounded-2xl border border-line bg-surface p-3 text-left text-[13px] font-semibold">
+              <Ic size={18} className="text-primary" />
+              {l}
+            </button>
+          ))}
+        </div>
         <section className="glass-deep flex flex-col gap-4 rounded-[24px] p-5">
           <div className="flex items-center gap-4">
             <LevelRing size={78} stroke={6} dark />

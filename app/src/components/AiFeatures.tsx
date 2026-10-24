@@ -66,7 +66,7 @@ function Thinking({ label = "Thinking" }: { label?: string }) {
 }
 
 /**
- * The AI can't run here. On nilobs.com that means "sign in with Google". A local test build (no NilObs server)
+ * The AI can't run here. On nilobs.com that means "sign in". A local test build (no NilObs server)
  * has no sign-in and no AI.
  */
 export function AiOff({ title }: { title?: string; what?: string; screen?: string }) {
@@ -472,7 +472,7 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
                 ask(text)
               }
             }}
-            placeholder={sample === null ? (HOSTED ? "Sign in with Google to ask" : "The AI isn't available in this view") : "Ask about the inspection…"}
+            placeholder={sample === null ? (HOSTED ? "Sign in to ask" : "The AI isn't available in this view") : "Ask about the inspection…"}
             className="max-h-32 min-h-12 flex-1 resize-none rounded-xl border border-line bg-white/80 px-3 py-3 text-[14.5px] leading-snug outline-none focus:border-primary disabled:opacity-60"
           />
           {sample && !busy && <MicButton value={text} onChange={setText} />}
@@ -692,7 +692,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   if (sample === null)
     return (
       <>
-        <div className="px-5 pb-3"><AiOff title="Sign in with Google and the AI inspector grades your answers" what="have your answers graded by the AI inspector" screen="practice" /></div>
+        <div className="px-5 pb-3"><AiOff title="Sign in and the AI inspector grades your answers" what="have your answers graded by the AI inspector" screen="practice" /></div>
         {fallback}
       </>
     )
@@ -1047,7 +1047,7 @@ export function ExplainObs({ o, compact }: { o: Obs; compact?: boolean }) {
   if (!sample) {
     if (gate !== "closed") return null
     return (
-      <button type="button" onClick={() => auth.prompt("Sign in with Google to see why it was raised")} className={cn("flex items-center gap-1.5 self-start rounded-full border border-[#d9cffd] bg-[#f4f0ff]/80 font-semibold text-[#5a3bd1] hover:bg-[#ece5ff]", compact ? "h-8 px-2.5 text-[12px]" : "h-9 px-3 text-[12.5px]")}>
+      <button type="button" onClick={() => auth.prompt("Sign in to see why it was raised")} className={cn("flex items-center gap-1.5 self-start rounded-full border border-[#d9cffd] bg-[#f4f0ff]/80 font-semibold text-[#5a3bd1] hover:bg-[#ece5ff]", compact ? "h-8 px-2.5 text-[12px]" : "h-9 px-3 text-[12.5px]")}>
         <I.Sparkle size={14} /> Why, and how to close it
         <span className="font-mono font-normal text-[#5a3bd1]/70">· sign in</span>
       </button>
@@ -1156,7 +1156,7 @@ export function BriefPlan({ brief, date, evidence, daysLeft, plan, setPlan }: { 
         <Md text={plan} />
       </section>
     ) : (
-      <SignInForAi title="Sign in with Google to make your day-by-day plan">The first plan is included with the brief. Signing in also keeps the brief on every device.</SignInForAi>
+      <SignInForAi title="Sign in to make your day-by-day plan">The first plan is included with the brief. Signing in also keeps the brief on every device.</SignInForAi>
     )
   if (sample === null) return null
   const days = Math.max(1, Math.min(7, daysLeft || 3))
@@ -1290,7 +1290,7 @@ export function RolePack({ rank, ship }: { rank: string; ship: string }) {
         <span className="flex items-center gap-2 text-[15px] font-bold"><I.Sparkle size={16} /> Cards written for a {name} <AiChip /></span>
         <span className="text-[13px] leading-snug text-mute">There's no prepared deck for your role yet, so the AI writes one: 10 likely questions with model answers, and a checklist of what to have ready. It's yours to keep on every device.</span>
         {gate === "closed" ? (
-          <button type="button" onClick={() => auth.prompt("Sign in with Google to make cards for your role")} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-[14px] font-semibold">Sign in to make them</button>
+          <button type="button" onClick={() => auth.prompt("Sign in to make cards for your role")} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-[14px] font-semibold">Sign in to make them</button>
         ) : (
           <button type="button" disabled={busy || !sample} onClick={make} className="flex h-11 items-center justify-between rounded-xl bg-gradient-to-r from-[#7b5cff] to-[#1660d6] px-4 text-[14px] font-semibold text-white disabled:opacity-60">
             {busy ? "Writing your cards…" : <>Make my role pack <CostTag cost={COSTS.rolePack} className="text-white/85" /></>}

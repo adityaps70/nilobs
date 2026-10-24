@@ -318,7 +318,7 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
         </section>
 
         {sample === null ? (
-          <AiOff title="Sign in with Google to check photos" what="check photos" screen="photo" />
+          <AiOff title="Sign in to check photos" what="check photos" screen="photo" />
         ) : lim === null ? (
           <div className="flex gap-3 rounded-2xl border border-dashed border-line bg-surface p-4 text-[13.5px] leading-snug">
             <IconTile icon={I.Camera} color="sky" size={34} />

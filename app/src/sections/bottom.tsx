@@ -16,6 +16,9 @@ import { Logo } from "@/components/Brand"
 import { cn } from "@/lib/utils"
 import { FLEET, REPEATS, RANKS, RANK_NAMES, topicCounts } from "@/data"
 import { SectionHead } from "./top"
+import { FLEET as FLEET_PLAN, PLANS, fmtPrice } from "@/economy"
+import { useWallet } from "@/credits"
+import { useNav } from "@/nav"
 
 function useMedia(q: string) {
   const [m, setM] = useState(() => window.matchMedia(q).matches)
@@ -192,6 +195,7 @@ export function Fleet() {
         <SectionHead eyebrow="For ship managers" title="See every crew's readiness before the inspector does.">
           The same debriefs, pooled across fleets, become a console for vetting superintendents. Send briefs, see who rehearsed, and catch repeat observations early. Try the buttons.
         </SectionHead>
+        {HOSTED && <FleetOffer />}
         {wide ? (
           <Safari url="sire-ready / fleet" className="drop-shadow-[0_30px_60px_rgba(16,35,58,0.12)]">
             <FleetConsole />
@@ -203,6 +207,23 @@ export function Fleet() {
         )}
       </div>
     </section>
+  )
+}
+
+/** The fleet plan, as it's sold today: seats for a crew, an invite link and a readiness report. */
+function FleetOffer() {
+  const { openApp } = useNav()
+  const w = useWallet()
+  const cur = w.currency
+  return (
+    <div className="glass flex flex-col gap-4 rounded-[26px] p-6 md:flex-row md:items-center md:justify-between">
+      <span className="flex flex-col gap-1.5">
+        <span className="font-mono text-[11.5px] tracking-[0.1em] text-mute uppercase">Fleet plan</span>
+        <span className="display text-[26px] leading-tight font-bold">{fmtPrice(FLEET_PLAN.price[cur].monthly, cur)} a seat a month</span>
+        <span className="text-[14px] leading-snug text-mute">From {FLEET_PLAN.min} seats. Every seat is a {PLANS.watch.name} plan ({PLANS.watch.credits} credits a month). Share one invite link with the crew, see a private board, and get a readiness report: practice scores by topic, drills and streaks. A year costs ten months. Nothing renews by itself.</span>
+      </span>
+      <button type="button" onClick={() => openApp({ screen: "crew" })} className="h-12 shrink-0 rounded-full bg-primary px-6 text-[15px] font-semibold text-on-primary">Set up your crew</button>
+    </div>
   )
 }
 
@@ -291,7 +312,7 @@ export function Footer() {
       <div className="mx-auto flex max-w-[1180px] flex-col gap-4 text-[13px] leading-relaxed text-mute">
         <span className="flex flex-wrap items-center gap-3 font-semibold text-ink"><Logo size={30} /><span className="text-signal-ink">Aim for nil.</span><span className="rounded-full border border-line px-2 py-0.5 font-mono text-[10.5px] font-normal text-mute">prototype</span></span>
         <p className="max-w-[90ch]">
-          Debrief data: 19 posts in the “SIRE 2.0” WhatsApp channel, April–October 2026, paraphrased with ship, crew and inspector names removed. Inspection data: SIRE 2.0, CDI, PSC and pre-vetting reports and observation lists from 2025–2026, with ship, crew, inspector and company names removed and wording paraphrased. The fleet console figures are sample data. Model answers, flashcards and the “what they want to see” lists were written for this prototype and should be checked by a master mariner before launch. {HOSTED ? "Signed out, your rank, practice credits, ratings, saved questions and streak stay in this browser only. Signed in with Google, they follow your account, and your credits are kept on the server." : "Your rank, credits, ratings, saved questions and streak stay in this browser only."}
+          Debrief data: 19 posts in the “SIRE 2.0” WhatsApp channel, April–October 2026, paraphrased with ship, crew and inspector names removed. Inspection data: SIRE 2.0, CDI, PSC and pre-vetting reports and observation lists from 2025–2026, with ship, crew, inspector and company names removed and wording paraphrased. The fleet console above is a demo with sample figures; the fleet plan's real report is in the app. Model answers, flashcards and the “what they want to see” lists were written for this prototype and should be checked by a master mariner before launch. {HOSTED ? "Signed out, your rank, practice credits, ratings, saved questions and streak stay in this browser only. Signed in, they follow your account, and your credits are kept on the server." : "Your rank, credits, ratings, saved questions and streak stay in this browser only."}
         </p>
         <p className="max-w-[90ch]">
           Industry figures:{" "}
@@ -306,6 +327,7 @@ export function Footer() {
             <a className="font-semibold text-ink underline underline-offset-2" href="/privacy">Privacy</a>
             <a className="font-semibold text-ink underline underline-offset-2" href="/terms">Terms</a>
             <a className="font-semibold text-ink underline underline-offset-2" href="/refunds">Refunds</a>
+            <a className="font-semibold text-ink underline underline-offset-2" href="/about">About</a>
           </p>
         )}
       </div>

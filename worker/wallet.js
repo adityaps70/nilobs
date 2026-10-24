@@ -13,6 +13,7 @@
 // Each user's wallet is one D1 row with a version number; concurrent changes retry on the latest copy.
 import * as E from "../app/src/economy.ts"
 import { reply } from "./guard.js"
+import { seatFor } from "./crews.js"
 
 export class HttpError extends Error {
   constructor(status, message, code, extra) {
@@ -86,14 +87,29 @@ async function firstWallet(env, userId, now) {
 
 async function load(env, userId, now) {
   const row = await env.DB.prepare("SELECT version, data FROM wallets WHERE user_id = ?").bind(userId).first()
-  if (!row) return { version: 0, data: { w: await firstWallet(env, userId, now), tickets: [], claims: [] }, stored: "" }
+  if (!row) return { version: 0, data: withSeat(await seatOf(env, userId, now), { w: await firstWallet(env, userId, now), tickets: [], claims: [] }, now), stored: "" }
   let parsed = null
   try {
     parsed = JSON.parse(row.data)
   } catch {
     /* a damaged row starts again from what migrate can recover */
   }
-  return { version: row.version, data: normalize(parsed, now), stored: row.data }
+  return { version: row.version, data: withSeat(await seatOf(env, userId, now), normalize(parsed, now), now), stored: row.data }
+}
+/** A fleet seat the company pays for (worker/crews.js): Watchkeeper to the end of the fleet's paid period. */
+async function seatOf(env, userId, now) {
+  try {
+    return await seatFor(env.DB, userId, now)
+  } catch (e) {
+    console.error("seat", e?.message || e)
+    return null
+  }
+}
+function withSeat(seat, data, now) {
+  if (!seat || !(seat.until > now) || seat.until <= (E.paidUntil(data.w) ?? 0)) return data
+  const r = E.grantSeat(data.w, seat.until, `Fleet seat from ${String(seat.name || "your company").slice(0, 40)}`, now)
+  if (r.ok) data.w = r.state
+  return data
 }
 
 async function save(env, userId, version, data, now) {

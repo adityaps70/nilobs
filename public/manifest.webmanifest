@@ -1,15 +1,84 @@
 {
   "name": "NilObs: SIRE 2.0 inspection prep",
   "short_name": "NilObs",
-  "description": "SIRE 2.0 inspection prep for tanker crews: flashcards, real observations, an AI inspector and daily missions. Aim for nil.",
+  "description": "SIRE 2.0 inspection prep for tanker crews: a 5-minute daily drill, flashcards for your role, real observations, live industry updates, an AI inspector and a crew board. Aim for nil.",
   "start_url": "/#app",
   "scope": "/",
   "display": "standalone",
   "background_color": "#edf3fa",
   "theme_color": "#0d5bc4",
   "icons": [
-    { "src": "/brand/nilobs-app-icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/brand/nilobs-app-icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "/brand/nilobs-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "/brand/nilobs-app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/brand/nilobs-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/brand/nilobs-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "id": "/",
+  "lang": "en",
+  "dir": "ltr",
+  "orientation": "any",
+  "categories": [
+    "education",
+    "productivity",
+    "business"
+  ],
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Today's drill",
+      "short_name": "Drill",
+      "url": "/#app/daily",
+      "icons": [
+        {
+          "src": "/brand/nilobs-app-icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Live updates",
+      "short_name": "Live",
+      "url": "/#app/live",
+      "icons": [
+        {
+          "src": "/brand/nilobs-app-icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "AI inspector",
+      "short_name": "Inspector",
+      "url": "/#app/practice",
+      "icons": [
+        {
+          "src": "/brand/nilobs-app-icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Your crew",
+      "short_name": "Crew",
+      "url": "/#app/crew",
+      "icons": [
+        {
+          "src": "/brand/nilobs-app-icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
   ]
 }

@@ -8,13 +8,27 @@
 // Nothing is copied from an article beyond its headline and link; the excerpt is only used to brief the AI.
 import { DAY, TOPICS, claudeJson, cleanTopics, ensureLiveSchema, json, plain, sha256hex } from "./live.js"
 
+// `urls` are tried in order; `home` is a page whose <link rel="alternate"> points to its feed, for sites whose
+// feed address isn't fixed. The address that worked is remembered (app_keys "feed_url:<id>").
 export const SOURCES = [
-  { id: "maib", name: "UK MAIB", kind: "govuk", official: true, url: "https://www.gov.uk/api/search.json?filter_content_store_document_type=maib_report&order=-public_timestamp&count=15" },
-  { id: "mca", name: "UK MCA", kind: "govuk", official: true, url: "https://www.gov.uk/api/search.json?filter_organisations=maritime-and-coastguard-agency&filter_format=guidance&filter_format=statutory_guidance&order=-public_timestamp&count=15" },
-  { id: "safety4sea", name: "SAFETY4SEA", kind: "rss", url: "https://safety4sea.com/feed/" },
-  { id: "splash", name: "Splash247", kind: "rss", url: "https://splash247.com/feed/" },
-  { id: "gcaptain", name: "gCaptain", kind: "rss", url: "https://gcaptain.com/feed/" },
-  { id: "marineinsight", name: "Marine Insight", kind: "rss", url: "https://www.marineinsight.com/feed/" },
+  { id: "maib", name: "UK MAIB", kind: "govuk", official: true, urls: ["https://www.gov.uk/api/search.json?filter_content_store_document_type=maib_report&order=-public_timestamp&count=15"] },
+  { id: "mca", name: "UK MCA", kind: "govuk", official: true, urls: ["https://www.gov.uk/api/search.json?filter_organisations=maritime-and-coastguard-agency&filter_format=guidance&filter_format=statutory_guidance&order=-public_timestamp&count=15"] },
+  { id: "uscg", name: "US Coast Guard", kind: "rss", official: true, urls: [], home: "https://www.news.uscg.mil/maritime-commons/" },
+  { id: "parismou", name: "Paris MoU", kind: "rss", official: true, urls: ["https://parismou.org/rss.xml"], home: "https://parismou.org/" },
+  { id: "amsa", name: "AMSA (Australia)", kind: "rss", official: true, urls: ["https://www.amsa.gov.au/rss.xml"], home: "https://www.amsa.gov.au/news-community/news-and-media-releases" },
+  { id: "ocimf", name: "OCIMF", kind: "rss", urls: [], home: "https://www.ocimf.org/news" },
+  { id: "chirp", name: "CHIRP Maritime", kind: "rss", urls: ["https://chirp.co.uk/feed/"], home: "https://chirp.co.uk/maritime/" },
+  { id: "britannia", name: "Britannia P&I", kind: "rss", urls: ["https://britanniapandi.com/feed/"], home: "https://britanniapandi.com/" },
+  { id: "ukpandi", name: "UK P&I Club", kind: "rss", urls: [], home: "https://www.ukpandi.com/news-and-resources/" },
+  { id: "gard", name: "Gard", kind: "rss", urls: [], home: "https://www.gard.no/insights/" },
+  { id: "northstandard", name: "NorthStandard", kind: "rss", urls: [], home: "https://north-standard.com/insights-and-resources" },
+  { id: "steamship", name: "Steamship Mutual", kind: "rss", urls: [], home: "https://www.steamshipmutual.com/" },
+  { id: "safety4sea", name: "SAFETY4SEA", kind: "rss", urls: ["https://safety4sea.com/feed/"] },
+  { id: "splash", name: "Splash247", kind: "rss", urls: ["https://splash247.com/feed/"] },
+  { id: "gcaptain", name: "gCaptain", kind: "rss", urls: ["https://gcaptain.com/feed/"] },
+  { id: "marineinsight", name: "Marine Insight", kind: "rss", urls: ["https://www.marineinsight.com/feed/"] },
+  { id: "maritimeexecutive", name: "The Maritime Executive", kind: "rss", urls: ["https://maritime-executive.com/articles.rss"], home: "https://maritime-executive.com/" },
+  { id: "hellenic", name: "Hellenic Shipping News", kind: "rss", urls: ["https://www.hellenicshippingnews.com/feed/"] },
 ]
 const SOURCE = new Map(SOURCES.map((s) => [s.id, s]))
 export const KINDS = ["detention", "alert", "accident", "rule", "sire", "industry"]
@@ -22,6 +36,9 @@ const KEEP_DAYS = 14 // older items aren't news any more
 const AI_PER_RUN = 16
 const AI_BATCH = 8
 const RELEVANT = 55
+export const PER_RUN = 4 // sources read per run (each run stays well inside Cloudflare's per-run limits)
+export const REFRESH_MS = 165 * 60000 // a source that worked is read again after this
+export const RETRY_MS = 12 * 3600000 // one that failed, after this
 
 /* ---------------- reading sources ---------------- */
 const tag = (xml, name) => {
@@ -54,18 +71,71 @@ export function parseGovUk(data) {
     .filter((r) => r.title && r.url)
 }
 
-async function readSource(src, fetchImpl) {
+const UA = "NilObs/1.0 (+https://nilobs.com)"
+async function get(url, accept, fetchImpl) {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), 12000)
   try {
-    const res = await fetchImpl(src.url, { headers: { "user-agent": "NilObs/1.0 (+https://nilobs.com)", accept: src.kind === "govuk" ? "application/json" : "application/rss+xml, application/atom+xml, application/xml, text/xml" }, signal: ctl.signal })
+    const res = await fetchImpl(url, { headers: { "user-agent": UA, accept }, signal: ctl.signal, redirect: "follow" })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const items = src.kind === "govuk" ? parseGovUk(await res.json()) : parseFeed(await res.text())
-    if (!items.length) throw new Error("no items found")
-    return items
+    return res
   } finally {
     clearTimeout(timer)
   }
+}
+/** The feed addresses a web page advertises (<link rel="alternate" type="application/rss+xml" href="...">). */
+export function discoverFeeds(html, base) {
+  const out = []
+  for (const m of String(html).matchAll(/<link\b[^>]*>/gi)) {
+    const t = m[0]
+    if (!/rel=["']?alternate/i.test(t) || !/type=["']?application\/(rss|atom)\+xml/i.test(t)) continue
+    const h = t.match(/href=["']([^"']+)["']/i)
+    if (!h) continue
+    try {
+      out.push(new URL(h[1].replace(/&amp;/g, "&"), base).toString())
+    } catch {
+      /* not a usable address */
+    }
+  }
+  return out.filter((u, i) => /^https?:/.test(u) && !/comments|\/comment/i.test(u) && out.indexOf(u) === i)
+}
+async function readUrl(src, url, fetchImpl) {
+  const res = await get(url, src.kind === "govuk" ? "application/json" : "application/rss+xml, application/atom+xml, application/xml, text/xml", fetchImpl)
+  const items = src.kind === "govuk" ? parseGovUk(await res.json()) : parseFeed(await res.text())
+  if (!items.length) throw new Error("no items found")
+  return items
+}
+/** Read a source: the address that worked last time, then its listed ones, then whatever its home page points to. */
+async function readSource(src, fetchImpl, known = "") {
+  const tried = new Set()
+  let last = null
+  const attempt = async (url) => {
+    if (!url || tried.has(url) || tried.size >= 4) return null
+    tried.add(url)
+    try {
+      return { items: await readUrl(src, url, fetchImpl), url }
+    } catch (e) {
+      last = e
+      return null
+    }
+  }
+  for (const u of [known, ...(src.urls || [])]) {
+    const r = await attempt(u)
+    if (r) return r
+  }
+  if (src.home && tried.size < 4) {
+    try {
+      const page = await get(src.home, "text/html", fetchImpl)
+      for (const u of discoverFeeds(await page.text(), page.url || src.home).slice(0, 2)) {
+        const r = await attempt(u)
+        if (r) return r
+      }
+      if (!last) last = new Error("no feed found on the page")
+    } catch (e) {
+      last = e
+    }
+  }
+  throw last || new Error("no feed address")
 }
 
 /* ---------------- the AI's reading ---------------- */
@@ -95,31 +165,43 @@ export async function runFeed(env, now = Date.now(), fetchImpl = fetch) {
   return report
 }
 
-/** Read every source and store what's new (no AI). */
+/** Sources due for a read: never read, or read longer ago than REFRESH_MS (RETRY_MS after a failure). Oldest first. */
+export function dueSources(rows, now = Date.now()) {
+  const by = new Map((rows || []).map((r) => [r.id, r]))
+  return SOURCES.map((src) => ({ src, row: by.get(src.id) }))
+    .filter(({ row }) => !row || !row.last_run || now - row.last_run > (row.last_error ? RETRY_MS : REFRESH_MS))
+    .sort((a, b) => (a.row?.last_run || 0) - (b.row?.last_run || 0))
+    .map(({ src }) => src)
+}
+
+/** Read the sources that are due (up to PER_RUN) and store what's new (no AI). */
 export async function fetchSources(env, now = Date.now(), fetchImpl = fetch) {
   await ensureLiveSchema(env.DB)
   const db = env.DB
   const report = { sources: {}, added: 0 }
+  const rows = (await db.prepare("SELECT * FROM feed_sources").all()).results || []
+  const due = dueSources(rows, now).slice(0, PER_RUN)
+  if (!due.length) return report
+  const keys = (await db.prepare(`SELECT k, v FROM app_keys WHERE k IN (${due.map(() => "?").join(",")})`).bind(...due.map((s) => `feed_url:${s.id}`)).all()).results || []
+  const known = new Map(keys.map((k) => [k.k.slice(9), k.v]))
   const health = []
-  // Few queries per run (Cloudflare limits them): new items go in as multi-row inserts, updates as one batch
-  for (const src of SOURCES) {
+  const writes = []
+  // One batch at the end: new items as multi-row inserts, the health of each source, the addresses that worked
+  for (const src of due) {
     try {
-      const items = await readSource(src, fetchImpl)
-      const rows = []
+      const { items, url } = await readSource(src, fetchImpl, known.get(src.id) || "")
+      const fresh = []
       for (const it of items) {
         const at = it.at || now
         if (at < now - KEEP_DAYS * DAY || at > now + DAY) continue
-        rows.push([(await sha256hex(it.url)).slice(0, 24), src.id, it.url, it.title, it.excerpt || "", at, now])
+        fresh.push([(await sha256hex(it.url)).slice(0, 24), src.id, it.url, it.title, it.excerpt || "", at, now])
       }
-      let added = 0
-      for (let i = 0; i < rows.length; i += 12) {
-        const chunk = rows.slice(i, i + 12) // D1 allows 100 bound values per query
-        const r = await db.prepare(`INSERT OR IGNORE INTO feed_items (id, source, url, title, excerpt, published_at, fetched_at, status) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, 'new')").join(", ")}`)
-          .bind(...chunk.flat()).run()
-        added += Number(r?.meta?.changes) || 0
+      for (let i = 0; i < fresh.length; i += 12) {
+        const chunk = fresh.slice(i, i + 12) // D1 allows 100 bound values per query
+        writes.push(db.prepare(`INSERT OR IGNORE INTO feed_items (id, source, url, title, excerpt, published_at, fetched_at, status) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, 'new')").join(", ")}`).bind(...chunk.flat()))
       }
-      report.sources[src.id] = { ok: true, found: items.length, added }
-      report.added += added
+      if (url !== known.get(src.id)) writes.push(db.prepare("INSERT INTO app_keys (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(`feed_url:${src.id}`, url))
+      report.sources[src.id] = { ok: true, found: items.length, recent: fresh.length }
       health.push([src.id, now, now, null, items.length])
     } catch (e) {
       const msg = String(e?.name === "AbortError" ? "timed out" : e?.message || e).slice(0, 200)
@@ -128,8 +210,12 @@ export async function fetchSources(env, now = Date.now(), fetchImpl = fetch) {
     }
   }
   if (health.length)
-    await db.prepare(`INSERT INTO feed_sources (id, last_run, last_ok, last_error, items) VALUES ${health.map(() => "(?, ?, ?, ?, ?)").join(", ")} ON CONFLICT (id) DO UPDATE SET last_run = excluded.last_run, last_ok = COALESCE(excluded.last_ok, feed_sources.last_ok), last_error = excluded.last_error, items = CASE WHEN excluded.last_ok IS NULL THEN feed_sources.items ELSE excluded.items END`)
-      .bind(...health.flat()).run()
+    writes.push(db.prepare(`INSERT INTO feed_sources (id, last_run, last_ok, last_error, items) VALUES ${health.map(() => "(?, ?, ?, ?, ?)").join(", ")} ON CONFLICT (id) DO UPDATE SET last_run = excluded.last_run, last_ok = COALESCE(excluded.last_ok, feed_sources.last_ok), last_error = excluded.last_error, items = CASE WHEN excluded.last_ok IS NULL THEN feed_sources.items ELSE excluded.items END`)
+      .bind(...health.flat()))
+  const before = Number((await db.prepare("SELECT COUNT(*) AS n FROM feed_items").first())?.n) || 0
+  if (writes.length) await db.batch(writes)
+  const after = Number((await db.prepare("SELECT COUNT(*) AS n FROM feed_items").first())?.n) || 0
+  report.added = Math.max(0, after - before)
   return report
 }
 

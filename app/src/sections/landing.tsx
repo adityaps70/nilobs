@@ -16,7 +16,7 @@ import * as I from "@/components/icons"
 import { ScaledScreen } from "@/components/PhoneApp"
 import { StoryCard, StoryReader } from "@/components/StoryViews"
 import { COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, WELCOME_CREDITS, fmtPrice, useWallet, type Cycle } from "@/credits"
-import { EARNED_DAYS } from "@/economy"
+import { EARNED_DAYS, FLEET, creditsBuyLine } from "@/economy"
 import { COST_ROWS, CurrencyToggle, CycleToggle, priceLine } from "@/components/Plans"
 import { cn } from "@/lib/utils"
 import { useNav } from "@/nav"
@@ -179,7 +179,7 @@ export function LandingHero() {
               <I.Target size={17} className="text-[#db4f10]" /> Play Spot the observation
             </a>
           </div>
-          <p className="text-[13.5px] text-mute">{HOSTED ? "No card. Sign in with Google to start: your credits and progress stay with your account on every device." : "No card. Flashcards, the radar, the ready kit and the game are free every day."}</p>
+          <p className="text-[13.5px] text-mute">{HOSTED ? "No card, no sign-up to try it. Sign in free (Google or email) when you want to keep your progress on every device and use the AI." : "No card. Flashcards, the radar, the ready kit and the game are free every day."}</p>
           <dl className="glass mt-1 grid grid-cols-2 gap-x-6 gap-y-4 rounded-[22px] p-5 sm:grid-cols-4">
             {[
               { v: STORIES.length, l: "inspection stories", icon: I.Newspaper, c: "rose" },
@@ -369,6 +369,9 @@ export function Pricing() {
                   <span className={cn("mt-1 text-[12px]", pop ? "text-hero-muted" : "text-mute")}>
                     {c.id === "free" ? `${WELCOME_CREDITS} credits to start` : cycle === "annual" ? `${fmtPrice(PLANS[c.id].price[cur].annual, cur)} for a year, paid once` : `${PLANS[c.id].credits.toLocaleString("en-IN")} credits every month`}
                   </span>
+                  <span className={cn("mt-1 text-[12px] font-medium", pop ? "text-hero-ink" : "text-ink")}>
+                    {creditsBuyLine(c.id === "free" ? WELCOME_CREDITS : PLANS[c.id].credits)}{c.id === "free" ? "" : " a month"}
+                  </span>
                 </span>
                 <ul className={cn("flex flex-col gap-2 border-t pt-4", pop ? "border-hero-track" : "border-line")}>
                   {c.perks.map((x) => (
@@ -456,7 +459,7 @@ export function Pricing() {
         </div>
         <p className="text-[12.5px] leading-relaxed text-mute">
           {HOSTED ? "Pay through Razorpay with UPI, cards, netbanking or wallets once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
-          {cur === "INR" ? "Rupee prices include GST." : "Dollar prices exclude local taxes."} Ship managers can buy plans for whole crews: get in touch.
+          {cur === "INR" ? "No GST is added: the price shown is what you pay." : "Dollar prices exclude any local taxes where you are."} Ship managers can buy seats for a whole crew: a fleet plan is {fmtPrice(FLEET.price[cur].monthly, cur)} a seat a month, from {FLEET.min} seats.
           {HOSTED && <> <a href="/terms" className="underline underline-offset-2">Terms</a> · <a href="/refunds" className="underline underline-offset-2">Refunds</a></>}
         </p>
       </div>

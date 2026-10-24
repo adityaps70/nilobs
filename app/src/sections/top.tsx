@@ -314,7 +314,7 @@ export function Features() {
     { icon: <I.Mic size={20} />, tile: "tile-violet", title: "Rehearse out loud", body: "The AI inspector asks what was asked of your rank and checks your answer for the fact, the procedure and the record." },
     { icon: <I.Flame size={20} />, tile: "tile-orange", title: "Five minutes a day", body: "Three daily missions, a streak with freezes, XP and levels. Cards you miss come back first. Fits between watches." },
     { icon: <I.Briefcase size={20} />, tile: "tile-amber", title: "Ready kit for the ship", body: `${KIT_TOTAL} pre-inspection checks: the drill matrix, rest-hour cross-checks, cyber evidence, photo rules and CDI prep.` },
-    { icon: <I.Moon size={20} />, tile: "tile-slate", title: "Built for watchkeeping", body: HOSTED ? "Night-watch mode keeps your night vision. One tap to sign in with Google, and we never ask for your ship." : "Night-watch mode keeps your night vision. Anonymous by design: no name, no ship." },
+    { icon: <I.Moon size={20} />, tile: "tile-slate", title: "Built for watchkeeping", body: HOSTED ? "Night-watch mode keeps your night vision. Try it without signing up, sign in with Google or email when you like, and we never ask for your ship." : "Night-watch mode keeps your night vision. Anonymous by design: no name, no ship." },
   ]
   return (
     <section id="features" className="gutter scroll-mt-20 py-20">

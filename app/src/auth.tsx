@@ -1,4 +1,6 @@
-// Sign in with Google, and keeping an account's progress and saved screens in step across devices.
+// Sign in (with Google, or with a code sent by email), and keeping an account's progress and saved screens in
+// step across devices. Signed out, the app still opens as a guest: progress stays in this browser and becomes
+// the account's on the first sign-in.
 // (The account's credits live on the server itself: see credits.tsx and worker/wallet.js.)
 //
 // Only on the hosted site (nilobs.com), and only when the server has sign-in set up (/api/auth/config).
@@ -7,10 +9,11 @@
 // Sync works like another browser tab: the app keeps writing to localStorage as it always has; this layer
 // notices changes and saves them to the account, and writes the account's newer copy back into localStorage
 // with a storage event, which progress already listens for.
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import { EXTRA_KEYS, MAX_EXTRA_CHARS, PROGRESS_KEY, WALLET_ACCOUNT_KEY, WALLET_KEY, mergeAll, type Extras, type Synced } from "@/sync"
 import { cn } from "@/lib/utils"
+import { PLANS, WELCOME } from "@/economy"
 
 declare const __AI_ENDPOINT__: string
 const ON_SITE = typeof __AI_ENDPOINT__ !== "undefined" && !!__AI_ENDPOINT__
@@ -24,16 +27,22 @@ interface Auth {
   signingIn: boolean
   user: User | null
   clientId: string | null
+  /** Sign-in by emailed code is set up on the server. */
+  emailOn: boolean
   sync: { state: SyncState; at: number }
   error: string
   signIn: (credential: string) => Promise<void>
+  /** Email a sign-in code. Resolves with an error message, or "" when it's sent. */
+  emailCode: (email: string) => Promise<string>
+  /** Sign in with the emailed code. Resolves with an error message, or "" when signed in. */
+  emailVerify: (email: string, code: string) => Promise<string>
   signOut: () => Promise<void>
   deleteAccount: () => Promise<void>
   /** Open the sign-in sheet, saying why. */
   prompt: (reason?: string) => void
 }
 const noop = async () => {}
-const Ctx = createContext<Auth>({ status: "off", signingIn: false, user: null, clientId: null, sync: { state: "idle", at: 0 }, error: "", signIn: noop, signOut: noop, deleteAccount: noop, prompt: () => {} })
+const Ctx = createContext<Auth>({ status: "off", signingIn: false, user: null, clientId: null, emailOn: false, sync: { state: "idle", at: 0 }, error: "", signIn: noop, emailCode: async () => "", emailVerify: async () => "", signOut: noop, deleteAccount: noop, prompt: () => {} })
 export const useAuth = () => useContext(Ctx)
 /** "open" when the AI can be used here, "closed" when it needs a sign-in first, "loading" while checking. */
 export function useAiGate(): "open" | "closed" | "loading" {
@@ -145,6 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>(ON_SITE ? "loading" : "off")
   const [user, setUser] = useState<User | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
+  const [emailOn, setEmailOn] = useState(false)
   const [sync, setSync] = useState<{ state: SyncState; at: number }>({ state: "idle", at: 0 })
   const [error, setError] = useState("")
   const [sheet, setSheet] = useState<string | null>(null)
@@ -234,13 +244,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let on = true
     ;(async () => {
       try {
-        const cfg = await api<{ google: string | null }>("/api/auth/config")
+        const cfg = await api<{ google: string | null; email?: boolean }>("/api/auth/config")
         if (!on) return
         if (cfg.status !== 200 || !cfg.body?.google) {
           setStatus("off")
           return
         }
         setClientId(cfg.body.google)
+        setEmailOn(!!cfg.body.email)
         const me = await api<{ user: User }>("/api/me")
         if (!on) return
         if (me.status === 200 && me.body?.user) {
@@ -306,6 +317,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, on)
   }, [])
 
+  /** The server said yes (Google or an email code): open the account on its own profile and progress. */
+  const enter = useCallback(async (u: User) => {
+    setUser(u)
+    userRef.current = u
+    setSheet(null)
+    setSigningIn(true)
+    try {
+      await settle(pull(u).catch(() => setSync((s) => ({ ...s, state: "offline" }))))
+      setStatus("in")
+    } finally {
+      setSigningIn(false)
+    }
+  }, [pull])
+
   const signIn = useCallback(async (credential: string) => {
     setError("")
     try {
@@ -314,18 +339,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setError(r.status === 429 ? "Too many tries. Wait a minute and try again." : "Google sign-in didn't go through. Try again.")
         return
       }
-      setUser(r.body.user)
-      userRef.current = r.body.user
-      setSheet(null)
-      setSigningIn(true)
-      await settle(pull(r.body.user).catch(() => setSync((s) => ({ ...s, state: "offline" }))))
-      setStatus("in")
+      await enter(r.body.user)
     } catch {
       setError("No connection. Try again when you have signal.")
-    } finally {
-      setSigningIn(false)
     }
-  }, [pull])
+  }, [enter])
+
+  const emailCode = useCallback(async (email: string) => {
+    try {
+      const r = await api<{ ok?: boolean; error?: string }>("/api/auth/email/start", { method: "POST", body: JSON.stringify({ email }) })
+      return r.status === 200 ? "" : r.body?.error || "Couldn't send the code. Try again."
+    } catch {
+      return "No connection. Try again when you have signal."
+    }
+  }, [])
+  const emailVerify = useCallback(async (email: string, code: string) => {
+    try {
+      const r = await api<{ user?: User; error?: string }>("/api/auth/email/verify", { method: "POST", body: JSON.stringify({ email, code }) })
+      if (r.status !== 200 || !r.body?.user) return r.body?.error || "That didn't work. Try again."
+      await enter(r.body.user)
+      return ""
+    } catch {
+      return "No connection. Try again when you have signal."
+    }
+  }, [enter])
 
   const leave = useCallback(async (how: "out" | "delete") => {
     if (how === "out") {
@@ -357,14 +394,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signingIn,
       user,
       clientId,
+      emailOn,
       sync,
       error,
       signIn,
+      emailCode,
+      emailVerify,
       signOut: () => leave("out"),
       deleteAccount: () => leave("delete"),
-      prompt: (reason) => setSheet(reason || "Sign in with Google to use the AI"),
+      prompt: (reason) => setSheet(reason || "Sign in to use the AI"),
     }),
-    [status, signingIn, user, clientId, sync, error, signIn, leave]
+    [status, signingIn, user, clientId, emailOn, sync, error, signIn, emailCode, emailVerify, leave]
   )
   return (
     <Ctx.Provider value={value}>
@@ -450,7 +490,7 @@ function SignInSheet({ reason, onClose }: { reason: string | null; onClose: () =
             className="sheet-panel flex w-full max-w-[400px] flex-col gap-3 rounded-[26px] border border-line p-5 text-ink shadow-2xl">
             <h2 id="signin-title" className="display text-[21px] leading-tight font-bold">{reason}</h2>
             <SignInPitch />
-            <GoogleButton />
+            <SignInOptions />
             <button type="button" onClick={onClose} className="h-10 text-[13.5px] font-semibold text-mute">Not now</button>
           </motion.div>
         </motion.div>
@@ -462,11 +502,10 @@ function SignInSheet({ reason, onClose }: { reason: string | null; onClose: () =
 export function SignInPitch() {
   return (
     <ul className="flex flex-col gap-1.5 text-[13.5px] leading-snug text-mute">
-      <li>• Live industry updates and a 5-minute daily drill for your role</li>
-      <li>• The AI inspector, Ask NilObs, Photo check and AI plans</li>
-      <li>• Credits and plans you can buy, kept safe on your account</li>
-      <li>• Your XP, streak and briefs on every phone and laptop</li>
-      <li>• Nothing is posted to Google. From Google we keep your name and email only. <a href="/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-2">Privacy</a></li>
+      <li>• Your XP, streak, briefs and progress on every phone and laptop</li>
+      <li>• {WELCOME.credits + PLANS.free.credits} free credits for the AI inspector, Ask NilObs, Photo check and AI plans</li>
+      <li>• Your crew board, weekly leagues, the inspection pulse and your certificate</li>
+      <li>• Nothing is posted anywhere. We keep your name and email only. <a href="/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-2">Privacy</a></li>
     </ul>
   )
 }
@@ -481,7 +520,7 @@ export function AccountCard({ className }: { className?: string }) {
       <section className={cn("glass flex flex-col gap-3 rounded-[22px] p-4", className)} aria-labelledby="acct-title">
         <h3 id="acct-title" className="text-[16px] font-bold">Sign in to use the AI and keep your progress</h3>
         <SignInPitch />
-        <GoogleButton />
+        <SignInOptions />
       </section>
     )
   const u = a.user
@@ -526,12 +565,12 @@ export function AccountCard({ className }: { className?: string }) {
 }
 
 /** A compact "Sign in to use the AI" block, for screens whose AI parts are locked. */
-export function SignInForAi({ title = "Sign in with Google to use the AI", children }: { title?: string; children?: ReactNode }) {
+export function SignInForAi({ title = "Sign in to use the AI", children }: { title?: string; children?: ReactNode }) {
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl border border-dashed border-line bg-surface p-4 text-[13.5px] leading-snug">
       <b className="font-semibold">{title}</b>
-      <span className="text-mute">{children ?? "It's free, and a new account starts with 80 credits. Signing in also keeps your progress on every device."}</span>
-      <GoogleButton />
+      <span className="text-mute">{children ?? `It's free, and a new account starts with ${WELCOME.credits + PLANS.free.credits} credits. Signing in also keeps your progress on every device.`}</span>
+      <SignInOptions />
     </div>
   )
 }
@@ -555,7 +594,7 @@ export function AccountChip({ role, onProfile, onPlans }: { role?: string; onPro
   if (a.status === "off" || a.status === "loading") return null
   if (a.status === "out" || !a.user)
     return (
-      <button type="button" onClick={() => a.prompt("Sign in with Google")} className="h-9 shrink-0 rounded-full bg-primary px-3.5 text-[13px] font-semibold text-on-primary">
+      <button type="button" onClick={() => a.prompt("Sign in to NilObs")} className="h-9 shrink-0 rounded-full bg-primary px-3.5 text-[13px] font-semibold text-on-primary">
         Sign in
       </button>
     )
@@ -581,6 +620,91 @@ export function AccountChip({ role, onProfile, onPlans }: { role?: string; onPro
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  )
+}
+
+/* ---------------- sign in with an emailed code ---------------- */
+/** For people without Google: type an email, get a 6-digit code, type it in. */
+export function EmailSignIn({ className }: { className?: string }) {
+  const { emailOn, emailCode, emailVerify } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [email, setEmail] = useState("")
+  const [sent, setSent] = useState("")
+  const [code, setCode] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+  if (!emailOn) return null
+  if (!open)
+    return (
+      <button type="button" onClick={() => setOpen(true)} className={cn("h-11 w-full rounded-full border border-line bg-surface text-[14px] font-semibold text-ink", className)}>
+        Use email instead
+      </button>
+    )
+  const send = async (e?: FormEvent) => {
+    e?.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setErr("")
+    const m = await emailCode(email.trim())
+    setBusy(false)
+    if (m) setErr(m)
+    else {
+      setSent(email.trim().toLowerCase())
+      setCode("")
+    }
+  }
+  const verify = async (e: FormEvent) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setErr("")
+    const m = await emailVerify(sent, code)
+    setBusy(false)
+    if (m) setErr(m)
+  }
+  const field = "h-11 w-full rounded-xl border border-line bg-surface px-3.5 text-[15px] text-ink outline-none focus:border-primary"
+  return (
+    <div className={cn("flex flex-col gap-2", className)}>
+      {!sent ? (
+        <form onSubmit={send} className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1 text-[12.5px] font-semibold text-mute">
+            Your email
+            <input type="email" required autoComplete="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className={field} />
+          </label>
+          <button type="submit" disabled={busy || !email.includes("@")} className="h-11 rounded-full bg-primary text-[14px] font-semibold text-on-primary disabled:opacity-50">{busy ? "Sending…" : "Email me a code"}</button>
+        </form>
+      ) : (
+        <form onSubmit={verify} className="flex flex-col gap-2">
+          <p className="text-[13px] leading-snug text-mute">We sent a 6-digit code to <b className="text-ink">{sent}</b>. It works for 10 minutes. Check spam if it isn't there.</p>
+          <label className="flex flex-col gap-1 text-[12.5px] font-semibold text-mute">
+            Code from the email
+            <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={cn(field, "tnum font-mono tracking-[0.3em]")} />
+          </label>
+          <button type="submit" disabled={busy || code.length !== 6} className="h-11 rounded-full bg-primary text-[14px] font-semibold text-on-primary disabled:opacity-50">{busy ? "Signing in…" : "Sign in"}</button>
+          <span className="flex justify-between text-[12.5px] font-semibold">
+            <button type="button" onClick={() => send()} disabled={busy} className="text-primary">Send a new code</button>
+            <button type="button" onClick={() => { setSent(""); setErr("") }} className="text-mute">Change email</button>
+          </span>
+        </form>
+      )}
+      {err && <p role="alert" className="text-[12.5px] font-medium text-signal-ink">{err}</p>}
+    </div>
+  )
+}
+
+/** Every way in: Google's button, and an emailed code when that's set up. */
+export function SignInOptions({ className }: { className?: string }) {
+  const { emailOn } = useAuth()
+  return (
+    <div className={cn("flex flex-col gap-2.5", className)}>
+      <GoogleButton />
+      {emailOn && (
+        <>
+          <span className="flex items-center gap-2 text-[11.5px] font-semibold tracking-wide text-mute uppercase"><span className="h-px flex-1 bg-line" />or<span className="h-px flex-1 bg-line" /></span>
+          <EmailSignIn />
+        </>
+      )}
     </div>
   )
 }

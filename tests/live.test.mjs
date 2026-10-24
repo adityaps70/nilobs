@@ -2,7 +2,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { call, fakeClaude, freshEnv, json, signIn } from "./helpers.mjs"
-import { parseFeed, parseGovUk, runFeed, SOURCES } from "../worker/feed.js"
+import { discoverFeeds, dueSources, parseFeed, parseGovUk, runFeed, PER_RUN, REFRESH_MS, RETRY_MS, SOURCES } from "../worker/feed.js"
 import { pushHostOk, runPush, vapid, vapidAuth } from "../worker/push.js"
 import { scrub } from "../worker/pulse.js"
 import { cleanName, resetLeagueCache, weekOf } from "../worker/league.js"
@@ -58,14 +58,34 @@ function feedWorld(now) {
   return { fetchImpl, calls }
 }
 
+/** Run the feed job until every source has had its turn (each run reads a few, oldest first). */
+async function runAll(env, now, fetchImpl) {
+  const all = { sources: {}, added: 0, read: 0, live: 0, runs: 0 }
+  for (let i = 0; i < Math.ceil(SOURCES.length / PER_RUN) + 1; i++) {
+    const r = await runFeed(env, now, fetchImpl)
+    if (!Object.keys(r.sources).length && !r.read) break
+    all.runs++
+    Object.assign(all.sources, r.sources)
+    all.added += r.added
+    all.read += r.read || 0
+    all.live += r.live || 0
+  }
+  return all
+}
+
 test("the feed job keeps what's new and relevant, writes takeaways, records each source's health", async () => {
   const env = fresh()
   const now = Date.now()
   const { fetchImpl, calls } = feedWorld(now)
-  const r = await runFeed(env, now, fetchImpl)
+  const first = await runFeed(env, now, fetchImpl)
+  assert.equal(Object.keys(first.sources).length, PER_RUN, "a few sources per run")
+  const r = await runAll(env, now, fetchImpl)
+  Object.assign(r.sources, first.sources)
+  r.live += first.live
+  assert.equal(Object.keys(r.sources).length, SOURCES.length, "every source gets its turn")
   assert.equal(r.sources.splash.ok, false)
   assert.match(r.sources.splash.error, /503/)
-  assert.equal(r.sources.safety4sea.added, 2, "the 40-day-old story is skipped")
+  assert.equal(r.sources.safety4sea.recent, 2, "the 40-day-old story is skipped")
   assert.equal(r.live, 2, "the MAIB report (found by both GOV.UK searches, stored once) + the PSC story; the CEO story is skipped")
   assert.ok(!calls.prompts.join("").includes("Old story"), "old items never reach the AI")
   const feed = await call(env, "/api/feed").then(json)
@@ -78,21 +98,55 @@ test("the feed job keeps what's new and relevant, writes takeaways, records each
   assert.ok(!feed.items.some((i) => /CEO/.test(i.title)))
   const maib = feed.items.find((i) => i.source === "maib")
   assert.equal(maib.official, true)
-  // a second run adds nothing and asks the AI nothing
+  // nothing is due straight after: a run reads nothing and asks the AI nothing
   const before = calls.ai
   const r2 = await runFeed(env, now + 1000, fetchImpl)
+  assert.deepEqual(r2.sources, {})
   assert.equal(r2.added, 0)
   assert.equal(calls.ai, before)
+  // three hours on, the sources that worked are read again (oldest first); the ones that failed wait 12 hours
+  const later = await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)
+  assert.ok(Object.keys(later.sources).length > 0)
+  assert.ok(!("splash" in later.sources), "a failing source isn't retried yet")
+  assert.equal(later.added, 0, "the same stories aren't stored twice")
+  const rows = (await env.DB.prepare("SELECT * FROM feed_sources").all()).results
+  assert.ok(dueSources(rows, now + RETRY_MS + 3600000).some((s) => s.id === "splash"), "retried after 12 hours")
   const health = (await env.DB.prepare("SELECT * FROM feed_sources WHERE id = 'splash'").first())
   assert.match(health.last_error, /503/)
   assert.ok(SOURCES.length >= 4)
+})
+
+test("a source without a fixed feed address: found from its page, then remembered", async () => {
+  const env = fresh()
+  const now = Date.now()
+  const html = `<html><head><link rel="alternate" type="application/rss+xml" title="News" href="/rss/news.xml"><link rel="alternate" type="application/rss+xml" href="/comments/feed"></head></html>`
+  assert.deepEqual(discoverFeeds(html, "https://www.news.uscg.mil/maritime-commons/"), ["https://www.news.uscg.mil/rss/news.xml"])
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    const u = String(url)
+    seen.push(u)
+    if (u.startsWith("https://api.anthropic.com/")) return claudeText("[]")
+    if (u === "https://www.news.uscg.mil/maritime-commons/") return new Response(html, { headers: { "content-type": "text/html" } })
+    if (u === "https://www.news.uscg.mil/rss/news.xml") return new Response(RSS([{ t: "Marine safety alert: tanker cargo pump room fire", u: "https://www.news.uscg.mil/a/1", at: now - 3600000, d: "Alert." }]))
+    if (u.includes("gov.uk")) return new Response(JSON.stringify({ results: [] }))
+    return new Response("nope", { status: 404 })
+  }
+  const r = await runFeed(env, now, fetchImpl)
+  assert.equal(r.sources.uscg.ok, true)
+  assert.equal(r.sources.uscg.recent, 1)
+  const key = await env.DB.prepare("SELECT v FROM app_keys WHERE k = 'feed_url:uscg'").first()
+  assert.equal(key.v, "https://www.news.uscg.mil/rss/news.xml")
+  seen.length = 0
+  for (let i = 0; i < 8; i++) if ("uscg" in (await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)).sources) break
+  assert.ok(seen.includes("https://www.news.uscg.mil/rss/news.xml"))
+  assert.ok(!seen.includes("https://www.news.uscg.mil/maritime-commons/"), "the page isn't fetched again")
 })
 
 test("without the AI, new items wait (nothing half-written is shown)", async () => {
   const env = fresh({ ANTHROPIC_API_KEY: "" })
   const now = Date.now()
   const { fetchImpl } = feedWorld(now)
-  const r = await runFeed(env, now, fetchImpl)
+  const r = await runAll(env, now, fetchImpl)
   assert.ok(r.added > 0)
   assert.equal(r.read, 0)
   assert.equal((await call(env, "/api/feed").then(json)).items.length, 0)
@@ -272,7 +326,7 @@ test("when the AI can't be reached from the scheduled job, the next visit has it
   const now = Date.now()
   const { fetchImpl } = feedWorld(now)
   const blocked = async (url, init) => (String(url).startsWith("https://api.anthropic.com/") ? new Response("Request not allowed", { status: 403 }) : fetchImpl(url, init))
-  const r = await runFeed(env, now, blocked)
+  const r = await runAll(env, now, blocked)
   assert.ok(r.added > 0)
   assert.equal(r.read, 0)
   // a visit: served at once with what's live (nothing yet), and the AI reads in the background

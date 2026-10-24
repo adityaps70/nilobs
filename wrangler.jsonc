@@ -13,7 +13,7 @@
     { "pattern": "www.nilobs.com", "custom_domain": true }
   ],
   "workers_dev": true,
-  // Every 15 minutes: daily reminders that are due, and the live industry feed once it's about 3 hours old (worker/index.js)
+  // Every 15 minutes: daily reminders that are due, and a few live-feed sources that are due (each about every 3 hours)
   "triggers": { "crons": ["*/15 * * * *"] },
   // Accounts for Sign in with Google: users, sessions and each user's synced state (schema: migrations/)
   "d1_databases": [
@@ -39,6 +39,14 @@
   // AI inspector's voice) in the Cloudflare dashboard under Workers & Pages > nilobs > Settings > Variables and Secrets,
   // or run: npx wrangler secret put ANTHROPIC_API_KEY  /  npx wrangler secret put RUMIK_API_KEY
   // ADMIN_EMAILS (secret): the Google account(s), comma-separated, that can open the analytics at /admin.
+  // Sign-in by emailed code (worker/email.js), either of:
+  //   - RESEND_API_KEY (secret) from resend.com, with nilobs.com verified there (free for 3,000 emails a month), or
+  //   - a Cloudflare Email Service binding called EMAIL (needs Workers Paid and nilobs.com onboarded under
+  //     Compute > Email Service): add  ,"send_email": [{ "name": "EMAIL" }]  below.
+  //   Optional: NILOBS_EMAIL_FROM, default "NilObs <signin@nilobs.com>".
+  // Receipts: NILOBS_BILLING_NAME (default "Sea N Shore IT Solutions LLP"), NILOBS_BILLING_ADDRESS, NILOBS_SUPPORT_EMAIL.
+  // The Play Store app (a Trusted Web Activity): ANDROID_PACKAGE and ANDROID_CERT_SHA256 (the signing key's SHA-256
+  // fingerprint, comma-separated if more than one) serve /.well-known/assetlinks.json. See README.
   // Optional voice settings: NILOBS_VOICE_SPEAKER (e.g. "speaker_2"), NILOBS_VOICE_TONE (e.g. "neutral", muga only),
   // NILOBS_VOICE_MODEL ("muga" or "mulberry"), NILOBS_VOICE_DESCRIPTION (mulberry only, e.g. "calm, firm male inspector").
   //

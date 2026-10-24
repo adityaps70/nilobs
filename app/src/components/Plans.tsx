@@ -13,10 +13,11 @@ import { BorderBeam } from "@/components/magicui/border-beam"
 import { Section, TopBar, Scroll } from "@/components/ui"
 import { IconTile, type TileColor } from "@/components/topicIcons"
 import { COSTS, EARN, PASS, PLANS, TOPUPS, fmtPrice, useWallet, type Currency, type Cycle, type PlanId } from "@/credits"
-import { EARNED_DAYS } from "@/economy"
+import { EARNED_DAYS, creditsBuyLine } from "@/economy"
 import { CYCLE_DAYS, DAY, PLAN_ORDER, PLAN_RANK, YEAR_CYCLES, canBuy, dayOf, paidUntil, paidUntil as paidUntilOf, perMonth, productKey } from "@/economy"
 import { LEVELS, useProgress } from "@/progress"
 import type { AppScreen } from "@/nav"
+import { ReceiptsCard } from "@/components/Crew"
 
 /* ---------------- toggles ---------------- */
 export function CurrencyToggle({ value, onChange, dark }: { value: Currency; onChange: (c: Currency) => void; dark?: boolean }) {
@@ -158,7 +159,7 @@ export function PlansSheet() {
   const pay = async () => {
     if (stage === "pay" || !can.ok || via === "closed" || via === "loading") return
     if (via === "signin") {
-      auth.prompt("Sign in with Google to buy credits or a plan")
+      auth.prompt("Sign in to buy credits or a plan")
       return
     }
     const my = ++token.current
@@ -254,6 +255,7 @@ export function PlansSheet() {
                                 <span className="text-[11px] text-mute">{cycle === "annual" ? "a month, yearly" : "a month"}</span>
                               </span>
                             </span>
+                            <span className="pl-8 text-[12px] leading-snug font-medium text-ink">{p.credits.toLocaleString("en-IN")} credits a month {creditsBuyLine(p.credits)}</span>
                             <span className="flex flex-wrap gap-1.5 pl-8">
                               {p.perks.slice(0, 4).map((x) => <span key={x} className="rounded-full bg-surface px-2 py-0.5 text-[11.5px] text-mute">{x}</span>)}
                             </span>
@@ -283,7 +285,7 @@ export function PlansSheet() {
                           <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border-2", on ? "border-signal" : "border-line")}>{on && <span className="size-2.5 rounded-full bg-signal" />}</span>
                           <span className="flex min-w-0 flex-1 flex-col">
                             <span className="flex items-center gap-2 text-[15px] font-bold">{t.credits.toLocaleString("en-IN")} credits{t.tag && <span className="rounded-full bg-signal-soft px-2 py-0.5 font-mono text-[10px] font-semibold text-signal-ink">{t.tag.toUpperCase()}</span>}</span>
-                            <span className="text-[12.5px] text-mute">Never expire · about {Math.floor(t.credits / COSTS.interview)} mock interviews</span>
+                            <span className="text-[12.5px] text-mute">Never expire · {creditsBuyLine(t.credits)}</span>
                           </span>
                           <span className="tnum text-[17px] font-bold">{fmtPrice(t.price[cur], cur)}</span>
                         </button>
@@ -305,7 +307,7 @@ export function PlansSheet() {
                   ) : via === "loading" ? (
                     "One moment…"
                   ) : via === "signin" ? (
-                    "Sign in with Google to buy"
+                    "Sign in to buy"
                   ) : (
                     <>{pick.kind === "plan" ? (sameRank ? `Add ${cycle === "annual" ? "a year" : "a month"}` : upgrade ? `Upgrade to ${PLANS[pick.id].name}` : `Get ${PLANS[pick.id].name}`) : pick.kind === "pass" ? "Get the Voyage pass" : "Buy credits"} · {fmtPrice(amount, cur)}</>
                   )}
@@ -321,7 +323,7 @@ export function PlansSheet() {
                     : via === "practice" ? `Prototype: no payment is taken (${what}). `
                     : ""}
                   {pick.kind === "plan" ? "Plans are paid up front and don't renew by themselves. " : ""}
-                  {cur === "INR" ? "Prices include GST." : ""}
+                  {cur === "INR" ? "No GST is added: the price shown is what you pay." : ""}
                   {HOSTED && via === "razorpay" && <> By paying you agree to the <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a> and <a href="/refunds" target="_blank" rel="noopener" className="underline">refund policy</a>.</>}
                 </p>
                 <p className="text-center text-[12px] text-mute">
@@ -485,11 +487,12 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
             ))}
           </ol>
         </Section>
+        <ReceiptsCard />
         <p className="text-center text-[11.5px] leading-snug text-mute">
           {w.mode === "account"
             ? "Your credits are kept on your NilObs account, so they're the same on every device. Payments go through Razorpay."
             : HOSTED
-              ? "Signed out, these practice credits stay in this browser. Sign in with Google to buy credits and use the AI."
+              ? "Signed out, these practice credits stay in this browser. Sign in to buy credits and use the AI."
               : "Prototype: purchases are simulated. Credits are kept in this browser."}{" "}
           Last checked {dayOf(Date.now())}.
         </p>

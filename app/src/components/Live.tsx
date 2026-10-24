@@ -13,6 +13,7 @@ import { roleOf } from "@/roles"
 import type { Brief, Topic } from "@/data"
 import type { AppScreen } from "@/nav"
 import { SpotGame } from "@/components/AppPlus"
+import { SignInScreen } from "@/app/AppGate"
 
 type Ico = (p: { size?: number; className?: string }) => ReactNode
 
@@ -573,6 +574,7 @@ export function PulseScreen({ go, openTopic }: { go: (s: AppScreen) => void; ope
     <>
       <TopBar title="Inspection pulse" />
       <Scroll className="gap-3">
+        <SignInScreen title="Sign in to see the pulse" text="What inspectors asked this month, from debriefs other crews shared with names removed. It's free: sign in to read it and share your own." />
         <p className="text-[13px] leading-snug text-mute">What inspectors asked in the last few weeks, from debriefs NilObs users shared. Names of ships, people, companies and ports are removed before anything appears here.</p>
         {v && v.trending.length > 0 && (
           <Section title="Trending this fortnight" aside={`${v.week} debrief${v.week === 1 ? "" : "s"} this week`}>
@@ -682,6 +684,7 @@ export function LeagueScreen() {
     <>
       <TopBar title="Weekly league" />
       <Scroll className="gap-3">
+        <SignInScreen title="Sign in to join this week's league" text="Weekly XP rankings with people in roles like yours, from Monday to Sunday. Anonymous unless you choose a name. Your guest progress comes with you." />
         {v && (
           <>
             <div className="no-scrollbar -mx-5 flex gap-1.5 overflow-x-auto px-5">

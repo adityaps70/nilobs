@@ -1,7 +1,7 @@
 // NilObs service worker: keeps the app usable at sea with no signal, and shows the daily drill reminder.
 // The app is one HTML file, so caching it (plus icons) is enough. The AI and voice routes always
 // need the network and are never cached here.
-const CACHE = "nilobs-v3"
+const CACHE = "nilobs-v4"
 const CORE = ["/", "/favicon.svg", "/manifest.webmanifest", "/brand/nilobs-app-icon-192.png", "/brand/nilobs-app-icon-512.png"]
 
 self.addEventListener("install", (e) => {
@@ -16,12 +16,14 @@ self.addEventListener("fetch", (e) => {
   const req = e.request
   const url = new URL(req.url)
   if (req.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return
-  // Pages: try the network first so updates arrive, fall back to the saved copy offline
+  // Pages: try the network first so updates arrive, fall back to the saved app offline. Only the app itself is
+  // saved: other pages (policies, receipts, certificates) are never stored as it.
   if (req.mode === "navigate" || url.pathname === "/" || url.pathname === "/index.html") {
+    const app = url.pathname === "/" || url.pathname === "/index.html"
     e.respondWith(
       fetch(req)
         .then((res) => {
-          if (res.ok) {
+          if (res.ok && app) {
             const copy = res.clone()
             caches.open(CACHE).then((c) => c.put("/", copy))
           }

@@ -2,16 +2,22 @@ import { useEffect, useRef, useState } from "react"
 import { PhoneApp, type Screen } from "@/components/PhoneApp"
 import { useWallet } from "@/credits"
 import { useNav } from "@/nav"
+import { pendingJoin } from "@/components/Crew"
 
-const SCREENS: Screen[] = ["today", "stories", "setup", "loading", "brief", "practice", "drill", "bank", "share", "wallet", "train", "session", "spot", "radar", "kit", "me", "ask", "photo", "live", "daily", "pulse", "league"]
+const SCREENS: Screen[] = ["today", "stories", "setup", "loading", "brief", "practice", "drill", "bank", "share", "wallet", "train", "session", "spot", "radar", "kit", "me", "ask", "photo", "live", "daily", "pulse", "league", "crew", "cert"]
 
-/** Reads #app/<screen> or #app/stories/<id> so the browser's Back button moves between screens. */
+/** Reads #app/<screen>, #app/stories/<id> or #app/crew/<invite code> so the browser's Back button moves between screens. */
 function fromHash(): { screen?: Screen; storyId?: number | null } {
   try {
-    const m = window.location.hash.match(/^#app(?:\/([a-z]+))?(?:\/(\d+))?/)
+    const m = window.location.hash.match(/^#app(?:\/([a-z]+))?(?:\/([A-Za-z0-9]+))?/)
     if (!m) return {}
     const screen = m[1] && SCREENS.includes(m[1] as Screen) ? (m[1] as Screen) : undefined
-    return { screen: screen === "loading" ? "brief" : screen, storyId: m[2] ? Number(m[2]) : null }
+    if (screen === "crew" && m[2]) {
+      // an invite link: remember the code, and keep it out of the address bar
+      pendingJoin.set(m[2])
+      window.history.replaceState(null, "", "#app/crew")
+    }
+    return { screen: screen === "loading" ? "brief" : screen, storyId: m[2] && /^\d+$/.test(m[2]) ? Number(m[2]) : null }
   } catch {
     return {}
   }
