@@ -302,6 +302,7 @@ export function Footer() {
         </p>
         {HOSTED && (
           <p className="flex flex-wrap gap-x-4 gap-y-1">
+            <span>© 2026 Sea N Shore IT Solutions LLP</span>
             <a className="font-semibold text-ink underline underline-offset-2" href="/privacy">Privacy</a>
             <a className="font-semibold text-ink underline underline-offset-2" href="/terms">Terms</a>
             <a className="font-semibold text-ink underline underline-offset-2" href="/refunds">Refunds</a>
