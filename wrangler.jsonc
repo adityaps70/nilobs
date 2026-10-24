@@ -13,7 +13,7 @@
     { "pattern": "www.nilobs.com", "custom_domain": true }
   ],
   "workers_dev": true,
-  // Every 15 minutes: daily reminders that are due; every 3 hours on the hour: the live industry feed (worker/index.js)
+  // Every 15 minutes: daily reminders that are due, and the live industry feed once it's about 3 hours old (worker/index.js)
   "triggers": { "crons": ["*/15 * * * *"] },
   // Accounts for Sign in with Google: users, sessions and each user's synced state (schema: migrations/)
   "d1_databases": [

@@ -8,6 +8,7 @@ import { handleFeed, runFeed } from "./feed.js"
 import { handlePush, runPush } from "./push.js"
 import { handlePulse, runPulse } from "./pulse.js"
 import { handleLeague } from "./league.js"
+import { ensureLiveSchema } from "./live.js"
 import { limited, originAllowed, reply } from "./guard.js"
 
 const AUTH_ROUTES = ["/api/auth/config", "/api/auth/google", "/api/auth/logout", "/api/me", "/api/state"]
@@ -76,18 +77,25 @@ export default {
     return env.ASSETS.fetch(request)
   },
 
-  // Cron (wrangler.jsonc → triggers): every 15 minutes send the reminders that are due; every 3 hours, on the
-  // hour, also read the industry sources. Debriefs the AI couldn't check earlier are retried each time.
+  // Cron (wrangler.jsonc → triggers): every 15 minutes send the reminders that are due, and read the industry
+  // sources whenever the last read is more than about 3 hours old (so a new deploy or a missed run catches up by
+  // itself). Debriefs the AI couldn't check earlier are retried each time.
   async scheduled(event, env, ctx) {
     if (!env.DB) return
     const now = event?.scheduledTime || Date.now()
-    const d = new Date(now)
-    const feedTime = d.getUTCMinutes() < 15 && d.getUTCHours() % 3 === 0
+    let lastFeed = 0
+    try {
+      await ensureLiveSchema(env.DB)
+      lastFeed = Number((await env.DB.prepare("SELECT MAX(last_run) AS t FROM feed_sources").first())?.t) || 0
+    } catch {
+      /* first run: no table yet */
+    }
+    const feedTime = event?.cron === "feed" || now - lastFeed > 165 * 60000
     const jobs = [
       runPush(env, now, fetch, feedTime ? 15 : 30).catch((e) => console.error("push run", e?.message || e)),
       runPulse(env).catch((e) => console.error("pulse run", e?.message || e)),
     ]
-    if (feedTime || event?.cron === "feed") jobs.push(runFeed(env, now).then((r) => console.log("feed run", JSON.stringify(r))).catch((e) => console.error("feed run", e?.message || e)))
+    if (feedTime) jobs.push(runFeed(env, now).then((r) => console.log("feed run", JSON.stringify(r))).catch((e) => console.error("feed run", e?.message || e)))
     ctx.waitUntil(Promise.all(jobs))
   },
 }

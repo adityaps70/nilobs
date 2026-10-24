@@ -32,7 +32,8 @@ globalThis.fetch = async (url, init = {}) => {
     return fakeVoice.fail ? new Response("down", { status: 500 }) : new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "content-type": "audio/wav" } })
   }
   if (fakeProviders.handler && u.startsWith("https://api.razorpay.com/")) return fakeProviders.handler(u, init)
-  return realFetch(url, init)
+  if (fakeProviders.web) return fakeProviders.web(u, init)
+  return new Response("not reachable in tests", { status: 503 }) // tests never touch the real network
 }
 
 export function freshEnv(extra = {}) {
