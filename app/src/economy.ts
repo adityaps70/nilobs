@@ -161,6 +161,7 @@ export const COSTS = {
   voiceInterview: 12, // the same, with the inspector speaking each question
   brief: 20, // inspection brief + day-by-day AI plan
   planRedo: 3, // a fresh version of the AI plan
+  rolePack: 3, // flashcards and a checklist the AI writes for a role without prepared ones
   story: 5, // one full inspection story, yours to keep
   deck: 40, // one specialist deck, yours to keep
   listen: 1, // hear an answer read aloud in the studio voice
@@ -577,7 +578,7 @@ export function recordShare(state: WalletState, now: number, text = ""): WalletS
 export type Tier = "quick" | "default" | "complex"
 export type ItemKind =
   | "askQuick" | "askDeep" | "askExpert" | "explain" | "photo" | "interview" | "voiceInterview" | "mockInterview"
-  | "brief" | "planRedo" | "listen" | "story" | "deck" | "freeze"
+  | "brief" | "planRedo" | "rolePack" | "listen" | "story" | "deck" | "freeze"
 export interface Item { kind: ItemKind; n?: number; id?: string | number }
 export interface AiAllowance {
   calls: number // answers this charge pays for
@@ -602,6 +603,7 @@ export const ITEMS: Record<ItemKind, ItemRule> = {
   mockInterview: { usage: "interviews", refundable: false, label: () => "Mock interview" },
   brief: { usage: "briefs", refundable: false, label: () => "Inspection brief", ai: { calls: 1, tiers: ["default"], expertTier: true, maxChars: 20000, hold: false, hours: 24 * 60 } },
   planRedo: { usage: "deep", refundable: true, label: () => "A new prep plan", ai: { calls: 1, tiers: ["default"], expertTier: true, maxChars: 20000, hold: true, hours: 1 } },
+  rolePack: { usage: "deep", refundable: true, label: () => "Role pack: cards and checklist", ai: { calls: 1, tiers: ["default"], json: "always", maxChars: 12000, hold: true, hours: 1 } },
   listen: { usage: "listen", refundable: true, label: () => "Listen to an answer", ai: { calls: 0, tiers: [], voice: 1, maxChars: 0, hold: true, hours: 1 } },
   story: { usage: "stories", refundable: false, label: () => "Unlocked an inspection story" },
   deck: { usage: "decks", refundable: false, label: (it) => `Unlocked deck: ${String(it.id)}` },

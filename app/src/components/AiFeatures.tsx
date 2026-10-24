@@ -11,8 +11,9 @@ import { IconTile, TopicBadge } from "@/components/topicIcons"
 import { LogoMark } from "@/components/Brand"
 import { COSTS, CostTag, CreditPill, useWallet } from "@/credits"
 import { pop, useProgress } from "@/progress"
-import { CARDS, CHAPTER_NAMES, OBS, TYPE_NAME, cardsFor, type CardI, type Obs } from "@/fleet"
-import { RANK_NAMES, type Brief, type Topic } from "@/data"
+import { CARDS, CHAPTER_NAMES, OBS, TYPE_NAME, cardsFor, interviewPool, type CardI, type Obs } from "@/fleet"
+import { RANK_NAMES, TOPIC_EVIDENCE, type Brief, type Topic } from "@/data"
+import { currentRole, currentShip, isShore, roleContext, roleOf } from "@/roles"
 import { STORIES, storyById } from "@/stories"
 import {
   HIDE_CODES, HOSTED, aiErrorCopy, askRules, citedIds, contextBlock, inline, mdBlocks, retrieve, useSample,
@@ -212,7 +213,16 @@ export function suggestionsFor(rank: string) {
     "3/O": ["What do inspectors check on lifeboats and LSA?", "How do I answer questions about drills?"],
     "C/E": ["Which engine room alarm tests do inspectors ask for?", "Common machinery space observations"],
   }
-  return [...(byRank[rank] || byRank["2/O"]), `Make me a 5-day prep plan as ${r}`, "How do I close out an observation well?"]
+  const byGroup: Record<string, string[]> = {
+    deck: ["What will the inspector ask me on the bridge?", "How do I answer questions about drills?"],
+    engine: ["What do inspectors check on the engine room round?", "Which alarm and emergency tests will I be asked about?"],
+    cadet: ["What do inspectors ask cadets?", "What should be in my training record book before an inspection?"],
+    rating: ["What will the inspector ask me on deck?", "How do I answer questions about permits and PPE?"],
+    catering: ["What do inspectors check in the galley and stores?", "What safety questions do they ask the catering crew?"],
+    shore: ["How do we get a ship ready for its next SIRE 2.0 inspection?", "How should we answer an observation we disagree with?"],
+    other: ["What does a SIRE 2.0 inspection look at?", "Where do most observations come from?"],
+  }
+  return [...(byRank[rank] || byGroup[roleOf(rank).group]), `Make me a 5-day prep plan as ${r}`, isShore(rank) ? "How do we write a good close-out for an observation?" : "How do I close out an observation well?"]
 }
 
 export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openStory, go }: { rank: string; ship: string; seed?: string | null; seedAuto?: boolean; clearSeed?: () => void; openStory: (id: number) => void; go: (s: AppScreen) => void }) {
@@ -513,7 +523,11 @@ interface Session {
   receipt: string | null
   debrief: string
   recorded: boolean
+  /** Questions the AI wrote for roles without prepared ones (numbered from GEN_BASE). */
+  gen?: CardI[]
 }
+const GEN_BASE = 100000
+const TOPIC_LIST = Object.keys(TOPIC_EVIDENCE) as Topic[]
 const INT_KEY = "sr.interview"
 const QUESTIONS = 5
 /** Grading calls still running, by session id. They outlive the screen, so leaving mid-grade loses nothing. */
@@ -521,23 +535,25 @@ const inflight = new Map<string, Promise<void>>()
 /** A saved session, checked: anything malformed starts a fresh one. */
 function loadSession(rank: string): Session {
   const s = readLS<Session | null>(INT_KEY, null)
+  const gen = s && Array.isArray(s.gen) ? s.gen.filter((g) => g && typeof g.i === "number" && typeof g.q === "string" && typeof g.a === "string" && TOPIC_LIST.includes(g.p)) : []
+  const known = (i: unknown) => typeof i === "number" && (!!CARDS[i] || gen.some((g) => g.i === i))
   const ok =
     s && typeof s === "object" && typeof s.id === "string" && Array.isArray(s.turns) && Array.isArray(s.qs) &&
-    s.qs.every((i) => typeof i === "number" && !!CARDS[i]) && s.turns.every((t) => t && typeof t.q === "string" && typeof t.answer === "string" && !!CARDS[t.card])
+    s.qs.every(known) && s.turns.every((t) => t && typeof t.q === "string" && typeof t.answer === "string" && known(t.card))
   if (!ok) return newSession(rank)
-  return s
+  return { ...s, gen }
 }
 
-const gradePrompt = (rank: string, ship: string, q: string, card: CardI, answer: string, follow?: string) => `You are an experienced OCIMF SIRE 2.0 vetting inspector interviewing the ${RANK_NAMES[rank] || rank} of a ${ship.toLowerCase()} tanker. Grade the officer's spoken answer the way a fair but thorough inspector would.
+const gradePrompt = (rank: string, ship: string, q: string, card: CardI, answer: string, follow?: string) => `You are an experienced OCIMF SIRE 2.0 vetting inspector. ${roleContext(rank, ship)} You are interviewing them. Grade their spoken answer the way a fair but thorough inspector would.
 
 ${follow ? `This is your follow-up to the earlier question "${follow}".\n` : ""}Your question: ${q}
-Reference notes from experienced superintendents (what inspectors expect): ${card.a}${card.t ? ` Note: ${card.t}` : ""}
+Reference notes (what inspectors expect): ${card.a}${card.t ? ` Note: ${card.t}` : ""}
 The officer answered: """${answer.slice(0, 1500)}"""
 
 Score 0-10. Check three things: the FACT (correct knowledge), the PROCEDURE (do they know where the SMS or company procedure covers it) and the RECORD (do they mention what record or evidence they would show). Do not invent regulation numbers. If the answer is empty or "I don't know", score 0-2 and teach.
 
 Reply with only JSON:
-{"score": 7, "verdict": "Satisfactory" | "Needs work" | "Likely observation", "fact": {"ok": true, "note": "short"}, "procedure": {"ok": false, "note": "short"}, "record": {"ok": false, "note": "short"}, "missing": ["up to 3 short points they missed"], "followUp": "one probing follow-up question you would ask next, in the inspector's voice", "model": "a strong answer in first person, 2-4 sentences, as the officer would say it"}`
+{"score": 7, "verdict": "Satisfactory" | "Needs work" | "Likely observation", "fact": {"ok": true, "note": "short"}, "procedure": {"ok": false, "note": "short"}, "record": {"ok": false, "note": "short"}, "missing": ["up to 3 short points they missed"], "followUp": "one probing follow-up question you would ask next, in the inspector's voice", "model": "a strong answer in first person, 2-4 sentences, as this person would say it"}`
 
 function ScoreRing({ score }: { score: number }) {
   const r = 26, c = 2 * Math.PI * r
@@ -553,9 +569,28 @@ function ScoreRing({ score }: { score: number }) {
   )
 }
 
+/** The AI writes interview questions for roles that have no prepared ones (shore staff, catering, "Other"). */
+const genPrompt = (rank: string, ship: string, topic: Topic | null) => `You are an experienced OCIMF SIRE 2.0 vetting inspector. ${roleContext(rank, ship)}
+Write ${QUESTIONS} interview questions ${isShore(rank) ? "that an inspector, an oil major's vetting team or a TMSA auditor would put to this person about how the company prepares, supports and oversees its ship and crew, and how it answers observations" : "that an inspector would ask this person during a SIRE 2.0 inspection (in interviews, on rounds or while checking records)"}${topic ? `, at least three of them about ${topic}` : ""}. Make them specific and practical, the way inspectors really ask, and matched to what this role actually does. Never quote OCIMF question wording and never invent regulation numbers.
+For each, write short reference notes on what a strong answer covers: the fact, the procedure and the record or evidence.
+Reply with only JSON: {"questions": [{"q": "the question, in the inspector's voice", "topic": one of ${JSON.stringify(TOPIC_LIST)}, "notes": "what a strong answer covers, 2-4 sentences"}]}`
+function genCards(raw: unknown, rank: string): CardI[] {
+  const list = Array.isArray((raw as { questions?: unknown })?.questions) ? (raw as { questions: unknown[] }).questions : []
+  const fallback = roleOf(rank).topics[0] || "Documents & SMS"
+  return list
+    .map((x) => x as { q?: unknown; topic?: unknown; notes?: unknown })
+    .filter((x) => typeof x.q === "string" && x.q.trim().length > 8)
+    .slice(0, QUESTIONS)
+    .map((x, k) => ({
+      i: GEN_BASE + k, d: "trending" as const, r: rank, l: 1, t: "",
+      q: String(x.q).trim().slice(0, 300),
+      a: String(x.notes || "").trim().slice(0, 900),
+      p: (TOPIC_LIST.includes(x.topic as Topic) ? x.topic : fallback) as Topic,
+    }))
+}
+
 /** Five questions for the rank; a topic focus takes up to five from that topic and fills the rest. */
-function pickQuestions(rank: string, topic: Topic | null) {
-  const pool = cardsFor("trending", rank)
+function pickQuestions(pool: CardI[], topic: Topic | null) {
   const shuffle = <T,>(a: T[]) => [...a].sort(() => Math.random() - 0.5)
   const focus = topic ? shuffle(pool.filter((c) => c.p === topic)).slice(0, QUESTIONS) : []
   const rest = shuffle(pool.filter((c) => !focus.includes(c))).slice(0, QUESTIONS - focus.length)
@@ -569,11 +604,16 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   const wallet = useWallet()
   const prog = useProgress()
   const studio = useStudioVoice()
+  // prepared questions where there are enough for this role; otherwise the AI writes them
+  const pool = useMemo(() => interviewPool(rank), [rank])
+  const aiWrites = pool.length === 0
   const topics = useMemo(() => {
+    if (aiWrites) return roleOf(rank).topics.slice(0, 8)
     const counts = new Map<string, number>()
-    for (const c of cardsFor("trending", rank)) counts.set(c.p, (counts.get(c.p) || 0) + 1)
+    for (const c of pool) counts.set(c.p, (counts.get(c.p) || 0) + 1)
     return [...counts].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t]) => t as Topic)
-  }, [rank])
+  }, [rank, pool, aiWrites])
+  const [preparing, setPreparing] = useState(false)
   const [topic, setTopic] = useState<Topic | null>(null)
   const [voicePick, setVoicePick] = useState(false)
   const [ses, setSes] = useState<Session>(() => {
@@ -609,7 +649,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   const { phase, turns, idx, qs } = ses
   const srank = ses.phase === "setup" ? rank : ses.rank // an interview in progress keeps the rank it started with
   const current = turns[turns.length - 1]
-  const cardOf = (i: number) => CARDS[i]
+  const cardOf = (i: number) => (i >= GEN_BASE ? sesRef.current.gen?.find((g) => g.i === i) ?? ses.gen?.find((g) => g.i === i) : CARDS[i]) as CardI
   const update = (f: (s: Session) => Session) => setSes((s) => f(s))
   /** Apply a change to session `sid`, whether or not this screen is still open. */
   const write = (sid: string, f: (s: Session) => Session) => {
@@ -655,16 +695,33 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
 
   const voiceCost = wallet.perks.voiceIncluded ? COSTS.interview : COSTS.voiceInterview
   const cost = voicePick && studio ? voiceCost : COSTS.interview
-  const start = () => {
+  const start = async () => {
+    if (preparing) return
     const receipt = wallet.charge({ kind: voicePick && studio ? "voiceInterview" : "interview" }, { note: RANK_NAMES[rank] || rank })
     if (!receipt) return
-    const pick = pickQuestions(rank, topic)
-    const first = cardOf(pick[0])
     spokenRef.current = ""
     setErr("")
     setText("")
     setDebriefErr("")
-    setSes({ ...newSession(rank), phase: "ask", qs: pick, idx: 0, turns: [{ q: first.q, answer: "", card: pick[0] }], voice: voicePick, receipt })
+    let gen: CardI[] = []
+    if (aiWrites) {
+      setPreparing(true)
+      try {
+        gen = genCards(await sample.json(genPrompt(rank, ship, topic), { modelTier: "quick", ticket: receipt }), rank)
+        if (gen.length < 3) throw { code: "invalid_json" }
+      } catch (e) {
+        wallet.refund(receipt)
+        setPreparing(false)
+        setErr(`${aiErrorCopy(e as AiErr) || "Couldn't write the questions."} Nothing was charged; try again.`)
+        return
+      }
+      setPreparing(false)
+    }
+    const pick = aiWrites ? gen.map((g) => g.i) : pickQuestions(pool, topic)
+    const first = aiWrites ? gen[0] : CARDS[pick[0]]
+    const next: Session = { ...newSession(rank), phase: "ask", qs: pick, idx: 0, turns: [{ q: first.q, answer: "", card: pick[0] }], voice: voicePick, receipt, gen }
+    sesRef.current = next
+    setSes(next)
   }
   const gradedCount = turns.filter((t) => t.grade).length
   // a refund is only possible before anything has been graded or sent for grading
@@ -744,7 +801,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
     update((s) => ({ ...s, debrief: "" }))
     const lines = turns.filter((t) => t.grade).map((t) => `Q: ${t.q}\nScore ${t.grade!.score}/10. Missed: ${t.grade!.missing.join("; ") || "nothing major"}`).join("\n\n")
     try {
-      await sample(`You are a SIRE 2.0 vetting superintendent debriefing a ${RANK_NAMES[srank] || srank} after a mock inspection interview. Here are their results:\n\n${lines}\n\nWrite: one line on how they came across, then "**Fix these before the inspection**" with exactly 3 "- " bullets (specific, practical), then one encouraging line. Under 140 words. No invented regulation numbers.`, {
+      await sample(`You are a SIRE 2.0 vetting superintendent debriefing someone after a mock inspection interview. ${roleContext(srank, ship)} Here are their results:\n\n${lines}\n\nWrite: one line on how they came across, then "**Fix these before the inspection**" with exactly 3 "- " bullets (specific, practical), then one encouraging line. Under 140 words. No invented regulation numbers.`, {
         modelTier: "quick",
         ticket: ses.receipt,
         onText: ({ text: t }) => update((s) => ({ ...s, debrief: t })),
@@ -769,7 +826,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
             </span>
             <IconTile icon={I.Mic} color="violet" size={50} />
           </div>
-          <span className="text-[14px] leading-relaxed text-white/75">{QUESTIONS} real questions for a {RANK_NAMES[rank] || rank}. Answer the way you would on board. You get a score, what you missed on the fact, the procedure and the record, a model answer, and the follow-up an inspector would ask next. Follow-ups and the debrief are included.</span>
+          <span className="text-[14px] leading-relaxed text-white/75">{aiWrites ? `${QUESTIONS} questions written for a ${RANK_NAMES[rank] || rank}, the way inspectors ask them.` : `${QUESTIONS} real questions for a ${RANK_NAMES[rank] || rank}.`} Answer the way you would {isShore(rank) ? "to an inspector or auditor" : "on board"}. You get a score, what you missed on the fact, the procedure and the record, a model answer, and the follow-up an inspector would ask next. Follow-ups and the debrief are included.</span>
           <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Interview style">
             {([[false, "Type or dictate", "Read the questions", COSTS.interview], [true, "Voice interview", studio ? (wallet.perks.voiceIncluded ? "The inspector speaks · no extra cost" : "The inspector speaks") : "Read aloud by your device", studio ? voiceCost : COSTS.interview]] as const).map(([v, l, sub, c]) => (
               <button key={String(v)} type="button" role="radio" aria-checked={voicePick === v} onClick={() => setVoicePick(v)} className={cn("flex flex-col gap-0.5 rounded-2xl border px-3 py-2.5 text-left", voicePick === v ? "border-[#ffcf5a] bg-white/[0.12]" : "border-white/15 bg-white/[0.04] hover:bg-white/[0.08]")}>
@@ -778,8 +835,8 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
               </button>
             ))}
           </div>
-          <button type="button" onClick={start} className="sheen flex h-12 items-center justify-between rounded-2xl bg-gradient-to-r from-[#ffcf5a] to-[#ff7a2f] px-4 text-[15px] font-bold text-[#2a1200]">
-            Start the {voicePick ? "voice " : ""}interview <CostTag cost={cost} />
+          <button type="button" onClick={start} disabled={preparing} className="sheen flex h-12 items-center justify-between rounded-2xl bg-gradient-to-r from-[#ffcf5a] to-[#ff7a2f] px-4 text-[15px] font-bold text-[#2a1200] disabled:opacity-70">
+            {preparing ? `Writing questions for a ${RANK_NAMES[rank] || rank}…` : <>Start the {voicePick ? "voice " : ""}interview <CostTag cost={cost} /></>}
           </button>
         </section>
         <div className="flex flex-col gap-2">
@@ -1004,7 +1061,7 @@ export function ExplainObs({ o, compact }: { o: Obs; compact?: boolean }) {
     ctl.current = c
     let got = ""
     try {
-      const { text } = await sample(`You are a vetting superintendent helping a tanker crew. An inspector raised this SIRE 2.0 observation: "${o.t}" (chapter ${o.c} ${CHAPTER_NAMES[o.c] || ""}${o.y ? `, ${TYPE_NAME[o.y]} observation` : ""}). The fleet's note on avoiding it: "${o.f}".
+      const { text } = await sample(`You are a vetting superintendent. ${roleContext(currentRole(), currentShip())} An inspector raised this SIRE 2.0 observation: "${o.t}" (chapter ${o.c} ${CHAPTER_NAMES[o.c] || ""}${o.y ? `, ${TYPE_NAME[o.y]} observation` : ""}). A note from real inspections on avoiding it: "${o.f}".
 
 Write these sections, each heading in bold on its own line:
 **Why it was raised** (1-2 sentences)
@@ -1114,7 +1171,7 @@ export function BriefPlan({ brief, date, evidence, daysLeft, plan, setPlan }: { 
     ctl.current = c
     const negs = brief.negatives.slice(0, 5).map((n) => n.text).join("; ")
     try {
-      const { text } = await sample(`You are a SIRE 2.0 vetting superintendent. Make a ${days}-day preparation plan for the ${RANK_NAMES[brief.rank] || brief.rank} of a tanker facing a ${brief.major} inspection${brief.port ? ` at ${brief.port}` : ""} on ${date}.
+      const { text } = await sample(`You are a SIRE 2.0 vetting superintendent. ${roleContext(brief.rank, currentShip())} Make a ${days}-day preparation plan for them for a ${brief.major} inspection${brief.port ? ` at ${brief.port}` : ""} on ${date}${isShore(brief.rank) ? ": what to check remotely, what to ask the ship for, how to brief the crew and what to have ready to support the inspection" : ""}.
 Likely focus topics: ${brief.focus.map((f) => f.topic).join(", ")}.
 Records to have ready: ${evidence.join("; ")}.
 Questions asked of this rank in recent inspections: ${brief.questions.slice(0, 8).map((q) => q.q).join(" | ")}.
@@ -1161,3 +1218,116 @@ For each day write "**Day N**" on its own line, then 3 "- " bullets (about 20 mi
 }
 
 export { storyById, HOSTED }
+
+/* =====================================================================
+   Role pack: flashcards and a checklist the AI writes for roles that have no prepared cards
+   ===================================================================== */
+const PACK_KEY = "sr.rolepack"
+interface RolePackData { rank: string; roleName: string; ship: string; at: number; cards: { q: string; a: string; topic: Topic }[]; checklist: string[]; done: Record<number, boolean> }
+const packPrompt = (rank: string, ship: string) => `You are a SIRE 2.0 vetting superintendent. ${roleContext(rank, ship)}
+Write study material for this person:
+- 10 flashcards with the questions ${isShore(rank) ? "an inspector, an oil major's vetting team or a TMSA auditor" : "an inspector"} is most likely to ask them, each with a short model answer that gives the fact, the procedure and the record or evidence (2-4 sentences);
+- a checklist of 8 specific things to have ready before the next inspection.
+Fit everything to what this role really does. Never quote OCIMF question wording and never invent regulation numbers; say "check your SMS" where it depends on the company.
+Reply with only JSON: {"cards": [{"q": "...", "a": "...", "topic": one of ${JSON.stringify(TOPIC_LIST)}}], "checklist": ["..."]}`
+function normalizePack(raw: unknown, rank: string, ship: string): RolePackData | null {
+  const r = raw as { cards?: unknown; checklist?: unknown }
+  const fallback = roleOf(rank).topics[0] || "Documents & SMS"
+  const cards = (Array.isArray(r?.cards) ? r.cards : [])
+    .map((c) => c as { q?: unknown; a?: unknown; topic?: unknown })
+    .filter((c) => typeof c.q === "string" && typeof c.a === "string" && c.q.trim() && c.a.trim())
+    .slice(0, 12)
+    .map((c) => ({ q: String(c.q).trim().slice(0, 300), a: String(c.a).trim().slice(0, 900), topic: (TOPIC_LIST.includes(c.topic as Topic) ? c.topic : fallback) as Topic }))
+  const checklist = (Array.isArray(r?.checklist) ? r.checklist : []).filter((x) => typeof x === "string" && x.trim()).slice(0, 12).map((x) => String(x).trim().slice(0, 200))
+  if (cards.length < 4) return null
+  return { rank, roleName: RANK_NAMES[rank] || rank, ship, at: Date.now(), cards, checklist, done: {} }
+}
+
+export function RolePack({ rank, ship }: { rank: string; ship: string }) {
+  const sample = useSample()
+  const wallet = useWallet()
+  const gate = useAiGate()
+  const auth = useAuth()
+  const [pack, setPack] = useState<RolePackData | null>(() => readLS<RolePackData | null>(PACK_KEY, null))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+  const [k, setK] = useState(0)
+  const [flip, setFlip] = useState(false)
+  const name = RANK_NAMES[rank] || rank
+  const mine = !!pack && pack.rank === rank && pack.roleName === name && Array.isArray(pack.cards) && pack.cards.length > 0
+  const save = (p: RolePackData) => {
+    setPack(p)
+    writeLS(PACK_KEY, p)
+  }
+  const make = async () => {
+    if (busy || !sample) return
+    const receipt = wallet.charge({ kind: "rolePack" }, { note: name })
+    if (!receipt) return
+    setBusy(true)
+    setErr("")
+    try {
+      const p = normalizePack(await sample.json(packPrompt(rank, ship), { modelTier: "default", ticket: receipt }), rank, ship)
+      if (!p) throw { code: "invalid_json" }
+      wallet.settle(receipt)
+      save(p)
+      setK(0)
+      setFlip(false)
+    } catch (e) {
+      wallet.refund(receipt)
+      const er = e as AiErr
+      if (er.code !== "cancelled") setErr(`${aiErrorCopy(er)} ${er.code === "payment" ? "" : "Your credits were refunded."}`.trim())
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (!mine)
+    return (
+      <section className="glass flex flex-col gap-3 rounded-[22px] p-4">
+        <span className="flex items-center gap-2 text-[15px] font-bold"><I.Sparkle size={16} /> Cards written for a {name} <AiChip /></span>
+        <span className="text-[13px] leading-snug text-mute">There's no prepared deck for your role yet, so the AI writes one: 10 likely questions with model answers, and a checklist of what to have ready. It's yours to keep on every device.</span>
+        {gate === "closed" ? (
+          <button type="button" onClick={() => auth.prompt("Sign in with Google to make cards for your role")} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-[14px] font-semibold">Sign in to make them</button>
+        ) : (
+          <button type="button" disabled={busy || !sample} onClick={make} className="flex h-11 items-center justify-between rounded-xl bg-gradient-to-r from-[#7b5cff] to-[#1660d6] px-4 text-[14px] font-semibold text-white disabled:opacity-60">
+            {busy ? "Writing your cards…" : <>Make my role pack <CostTag cost={COSTS.rolePack} className="text-white/85" /></>}
+          </button>
+        )}
+        {err && <p className="text-[12.5px] font-medium text-signal-ink">{err}</p>}
+      </section>
+    )
+  const c = pack!.cards[Math.min(k, pack!.cards.length - 1)]
+  const done = pack!.done || {}
+  return (
+    <section className="glass flex flex-col gap-3 rounded-[22px] p-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-2 text-[15px] font-bold"><I.Sparkle size={16} /> Your role pack <AiChip /></span>
+        <span className="tnum font-mono text-[11.5px] text-mute">{k + 1}/{pack!.cards.length}</span>
+      </div>
+      <button type="button" onClick={() => setFlip((f) => !f)} aria-label={flip ? "Show the question" : "Show the answer"} className="flex min-h-[140px] flex-col gap-2 rounded-2xl border border-line bg-surface p-4 text-left">
+        <span className="text-[11.5px] font-semibold text-mute">{c.topic} · {flip ? "Model answer" : "Question"}</span>
+        <span className={cn("leading-snug", flip ? "text-[14px]" : "text-[16px] font-semibold")}>{flip ? c.a : c.q}</span>
+        {!flip && <span className="mt-auto text-[12px] text-primary">Tap to see a strong answer</span>}
+      </button>
+      <div className="flex gap-2">
+        <button type="button" disabled={k === 0} onClick={() => { setK(k - 1); setFlip(false) }} className="h-10 flex-1 rounded-xl border border-line text-[13.5px] font-semibold disabled:opacity-40">Back</button>
+        <button type="button" disabled={k >= pack!.cards.length - 1} onClick={() => { setK(k + 1); setFlip(false) }} className="h-10 flex-1 rounded-xl bg-primary text-[13.5px] font-semibold text-on-primary disabled:opacity-40">Next card</button>
+      </div>
+      {pack!.checklist.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[13px] font-bold">Have these ready</span>
+          {pack!.checklist.map((item, i) => (
+            <button key={i} type="button" role="checkbox" aria-checked={!!done[i]} onClick={() => save({ ...pack!, done: { ...done, [i]: !done[i] } })} className="flex min-h-10 items-center gap-2.5 rounded-xl px-1 py-1.5 text-left hover:bg-surface-2">
+              <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border-2", done[i] ? "border-sea bg-sea text-white" : "border-line")}>{done[i] && <I.Check size={12} />}</span>
+              <span className={cn("text-[13px] leading-snug", done[i] && "text-mute line-through")}>{item}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center justify-between gap-2 text-[12px] text-mute">
+        <span>Written by AI for a {name}. Check it against your SMS.</span>
+        {gate !== "closed" && <button type="button" disabled={busy} onClick={make} className="shrink-0 font-semibold text-primary disabled:opacity-50">{busy ? "Writing…" : <>New pack · {COSTS.rolePack}</>}</button>}
+      </div>
+      {err && <p className="text-[12.5px] font-medium text-signal-ink">{err}</p>}
+    </section>
+  )
+}

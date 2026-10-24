@@ -67,7 +67,7 @@ export function RadarSection() {
     <section id="radar" className="gutter scroll-mt-20 py-20">
       <div className="mx-auto flex max-w-[1180px] flex-col gap-10">
         <SectionHead eyebrow="Observation radar" title="Where inspectors actually find problems">
-          {OBS.length} findings from one fleet's SIRE 2.0, CDI and pre-vetting inspections in 2025 and 2026, sorted by chapter, type and cause. Tap a chapter to read real examples.
+          {OBS.length} real findings from SIRE 2.0, CDI and pre-vetting inspections in 2025 and 2026, sorted by chapter, type and cause. Tap a chapter to read real examples.
         </SectionHead>
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
           <div className="glass flex min-w-0 flex-col gap-3 rounded-[26px] p-5">
@@ -189,7 +189,7 @@ export function AiSection() {
   const { openApp } = useNav()
   const [q, setQ] = useState("")
   const feats = [
-    { icon: I.Mic, c: "violet", t: "AI inspector", s: "Five real questions for your rank, typed or spoken. In a voice interview the inspector reads each question aloud and you answer out loud. Every answer is graded on the fact, the procedure and the record.", tag: `${COSTS.interview} credits` },
+    { icon: I.Mic, c: "violet", t: "AI inspector", s: "Five questions for your rank or role, typed or spoken. In a voice interview the inspector reads each question aloud and you answer out loud. Every answer is graded on the fact, the procedure and the record.", tag: `${COSTS.interview} credits` },
     { icon: I.Sparkle, c: "indigo", t: "Ask NilObs", s: `Ask anything. Answers draw on ${OBS.length} real observations and ${CARDS.length} Q&As, and show the records they came from. Quick or deep.`, tag: `from ${COSTS.askQuick} credit` },
     { icon: I.FileCheck, c: "teal", t: "Close-out drafts", s: "On any observation: why it was raised, the likely root cause, the fix on board, and a close-out response you can copy. Saved for next time.", tag: `${COSTS.explain} credit` },
     { icon: I.Camera, c: "sky", t: "Photo check", s: "Snap an area, a piece of equipment or a record. See what an inspector would flag, why, and how to fix it first, with similar findings from real inspections. Photos aren't stored.", tag: `${COSTS.photo} credits a photo` },

@@ -471,7 +471,7 @@ export function FinalCta() {
       <Ripple mainCircleSize={260} numCircles={7} className="[--foreground:var(--line)]" />
       <div className="relative mx-auto flex max-w-[640px] flex-col items-center gap-6 text-center">
         <h2 className="display text-[clamp(1.9rem,4vw,3rem)] leading-[1.05] font-bold">Your next inspection, briefed</h2>
-        <p className="max-w-[48ch] text-[17px] leading-relaxed text-mute">Open the app, pick your rank, and spend your first {WELCOME_CREDITS} credits on what matters for your next port.</p>
+        <p className="max-w-[48ch] text-[17px] leading-relaxed text-mute">Open the app, pick your rank or shore role, and spend your first {WELCOME_CREDITS} credits on what matters for your next port.</p>
         <ShimmerButton onClick={() => openApp()} background="#c4410c" shimmerColor="#ffffff" className="h-12 gap-2 px-7 text-[15px] font-semibold">
           Start free <I.ArrowRight size={17} />
         </ShimmerButton>
@@ -536,7 +536,7 @@ export function ConfidenceCheck() {
               <span className="tint flex size-11 items-center justify-center rounded-2xl bg-primary-soft text-primary"><I.ListCheck size={22} /></span>
               <span className="flex flex-col">
                 <span className="tnum display text-[30px] leading-none font-bold"><NumberTicker key={rank} value={lib.length} className="text-ink" /></span>
-                <span className="text-[13.5px] text-mute">SIRE 2.0 questions assigned to your rank</span>
+                <span className="text-[13.5px] text-mute">SIRE 2.0 questions this rank usually covers</span>
               </span>
             </span>
             <ul className="flex flex-col gap-2.5">
@@ -550,7 +550,7 @@ export function ConfidenceCheck() {
                 </li>
               ))}
             </ul>
-            <p className="text-[12px] leading-relaxed text-mute">Rank split from a ship manager's SIRE 2.0 rank-wise sheet. Question numbering from OCIMF's library.</p>
+            <p className="text-[12px] leading-relaxed text-mute">Rank split by the usual division of duties on a tanker; your company's SMS may differ. Question numbering from OCIMF's library.</p>
           </div>
           <div className="flex flex-col gap-3 rounded-3xl border border-line bg-surface p-6">
             <span className="text-[16px] font-bold">5 questions inspectors actually asked {CHECK_RANKS.find(([k]) => k === rank)?.[1]}s</span>

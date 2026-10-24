@@ -7,6 +7,7 @@ import { RANK_NAMES, RANK_TOPICS } from "@/data"
 import { STORIES, type Story } from "@/stories"
 import { UNAUTHORIZED_EVENT, useAiGate } from "@/auth"
 import { readyTicket } from "@/tickets"
+import { roleContext, roleOf } from "@/roles"
 
 /* ---------------- capability ---------------- */
 export type SampleOpts = {
@@ -281,13 +282,13 @@ export interface Context {
 export function retrieve(q: string, rank: string, n = { obs: 7, cards: 6, stories: 3 }): Context {
   const terms = tokenize(q)
   const rel = new Set(RANK_TOPICS[rank] || [])
-  const rankKey = rank === "C/E" ? "Engineers" : rank
+  const tags = (roleOf(rank).cards?.tags || []).filter((t) => t !== "All")
   const obs = OBS.map((o, i) => ({ o, i, s: score((o.t + " " + o.f + " " + o.p + " " + (CHAPTER_NAMES[o.c] || "")).toLowerCase(), terms) + (rel.has(o.p) ? 0.3 : 0) }))
     .filter((x) => x.s >= 1)
     .sort((a, b) => b.s - a.s)
     .slice(0, n.obs)
     .map((x) => ({ id: `O${x.i}`, o: x.o }))
-  const cards = CARDS.map((c) => ({ c, s: score((c.q + " " + c.a + " " + c.p).toLowerCase(), terms) + (c.r === rankKey ? 0.5 : 0) }))
+  const cards = CARDS.map((c) => ({ c, s: score((c.q + " " + c.a + " " + c.p).toLowerCase(), terms) + (tags.includes(c.r) ? 0.5 : 0) }))
     .filter((x) => x.s >= 1)
     .sort((a, b) => b.s - a.s)
     .slice(0, n.cards)
@@ -316,10 +317,10 @@ export function contextBlock(ctx: Context) {
 }
 
 export const askRules = (rank: string, ship: string) =>
-  `You are NilObs, a SIRE 2.0 vetting coach for tanker crews. Think like a former tanker master who now works as a vetting superintendent. You are helping a ${RANK_NAMES[rank] || rank} on a ${ship.toLowerCase()} tanker prepare for an oil-major inspection.
+  `You are NilObs, a SIRE 2.0 vetting coach for tanker crews and the companies that manage them. Think like a former tanker master who now works as a vetting superintendent. ${roleContext(rank, ship)}
 
 How to answer:
-- Be practical: what the inspector will ask, what to show, what to say, and the traps crews fall into.
+- Be practical and fit the answer to this person's role: ${roleOf(rank).group === "shore" ? "how to prepare the ship and crew, what to check and ask for, how to support the inspection and how to answer observations" : "what the inspector will ask them, what to show, what to say, and the traps people fall into"}.
 - Use the CONTEXT records from real, de-identified inspections when they are relevant, and cite them inline with the record's id in square brackets, exactly as it appears at the start of its CONTEXT line. Never cite an id that is not in the context.
 - Keep it under about 220 words unless asked for a plan or checklist. Short paragraphs and "- " bullets. Use **bold** for the key terms.
 - Never invent regulation numbers, OCIMF question wording or company procedures. If something depends on the rule or the company, say "check your SMS" or "check the current regulation".

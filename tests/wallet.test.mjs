@@ -264,3 +264,20 @@ test("voice interview: cancelling after the first question is read still refunds
   assert.equal(w.wallet.holds.length, 0, "listen settled")
   assert.equal(balanceOf(w.wallet), 80 - 12 - 1)
 })
+
+test("role pack: 3 credits, one JSON answer on the standard model; a garbled one is refundable", async () => {
+  const env = freshEnv()
+  const { cookie } = await signIn(env)
+  const s = await spend(env, cookie, { kind: "rolePack" }, "role-pack-0001")
+  assert.equal(s.status, 200)
+  assert.equal(balanceOf(s.wallet), 77)
+  assert.equal((await ai(env, cookie, { ticket: "role-pack-0001", tier: "complex" })).status, 403, "standard model only")
+  fakeClaude.next = () => textReply("not json")
+  await (await ai(env, cookie, { ticket: "role-pack-0001", tier: "default" })).text()
+  assert.equal((await call(env, "/api/wallet/refund", { method: "POST", cookie, body: { ticket: "role-pack-0001" } })).status, 200)
+  await spend(env, cookie, { kind: "rolePack" }, "role-pack-0002")
+  fakeClaude.next = () => textReply('{"cards": [{"q": "Q", "a": "A", "topic": "Cargo"}], "checklist": ["x"]}')
+  assert.match(await (await ai(env, cookie, { ticket: "role-pack-0002", tier: "default" })).text(), /checklist/)
+  assert.equal((await call(env, "/api/wallet/refund", { method: "POST", cookie, body: { ticket: "role-pack-0002" } })).status, 409)
+  fakeClaude.next = null
+})

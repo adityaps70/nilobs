@@ -28,13 +28,20 @@ Modelled on usage-credit products such as Emergent: try everything free, then pa
 | Voyage pass | ₹1,199 / $15 once | 1,000 for 180 days | Watchkeeper perks for 6 months, nothing renews |
 | Top-ups | ₹249 / ₹699 / ₹1,499 ($3 / $9 / $19) | 150 / 500 / 1,200 | Never expire |
 
-What things cost: quick AI answer 1, deep answer 4, expert answer 8 (Command), observation close-out 1, photo check 3 a photo, AI inspector interview 8 (12 with the studio voice), brief with AI plan 20, a new plan 3, a story 5, a specialist deck 40, listening to an answer 1, a streak freeze 10. Failed AI calls are refunded automatically.
+What things cost: quick AI answer 1, deep answer 4, expert answer 8 (Command), observation close-out 1, photo check 3 a photo, AI inspector interview 8 (12 with the studio voice), brief with AI plan 20, a new plan 3, a role pack (AI flashcards and checklist) 3, a story 5, a specialist deck 40, listening to an answer 1, a streak freeze 10. Failed AI calls are refunded automatically.
 
 Plans are **prepaid and never renew by themselves**: buying the same plan again adds a month or a year; moving up to a higher plan starts it now and turns the lower plan's months still to come into credits that don't expire; a lower plan can't be bought while a higher one runs.
 
 Credits are spent soonest-expiring first: plan credits refill every 30 days and don't roll over, welcome credits last 30 days, credits earned in the app last 60 days, top-ups never expire.
 
 XP is rank, not money: it never goes down. Ten levels from Cadet to Vetting legend; each level-up pays credits (10 to 100), badges pay 5, the daily chest pays 3, 7/30/100-day streaks pay 10/40/100, and a shared debrief pays 25 (up to 4 a month). Streaks of 7+ and 30+ days multiply learning XP by 1.2 and 1.5. AI answers and photo checks give a little XP, capped at 30 a day, so paying for AI doesn't buy rank.
+
+## Roles: every rank, and the shore team
+
+NilObs isn't tied to any one company. Onboarding offers every rank on board (deck officers, engineers and ETO, cadets, ratings, catering), the company's shore staff (marine and technical superintendents, port captain, vetting, HSEQ, DPA, fleet, crewing, training) and "Other", where the user types their own role. An optional company name only tailors the AI's answers. `app/src/roles.ts` lists each role with the topics it usually looks after and the SIRE 2.0 sections it usually covers, following the usual division of duties on a tanker and ashore (each company's SMS may differ, and the app says so).
+
+- **Prepared where it exists:** officers, engineers, cadets and ratings get the hand-written flashcards and interview questions that fit them.
+- **The AI fills the gaps:** for roles without prepared material (catering, shore staff, "Other") the AI inspector writes interview questions for that role, and a role pack (3 credits) writes flashcards and a checklist. Shore staff are asked what an inspector, an oil major's vetting team or a TMSA auditor would ask the company. Every AI prompt (Ask, close-outs, plans, photo checks, grading) says who the user is, on board or ashore.
 
 ## Sign in with Google
 

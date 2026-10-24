@@ -14,7 +14,7 @@ import * as I from "@/components/icons"
 import { burst } from "@/components/PhoneApp"
 import { Logo } from "@/components/Brand"
 import { cn } from "@/lib/utils"
-import { FLEET, REPEATS, RANKS, topicCounts } from "@/data"
+import { FLEET, REPEATS, RANKS, RANK_NAMES, topicCounts } from "@/data"
 import { SectionHead } from "./top"
 
 function useMedia(q: string) {
@@ -272,8 +272,7 @@ export function Waitlist() {
               <input id="wl-email" type="email" required placeholder="you@example.com" className="h-12 min-w-0 flex-1 rounded-xl bg-bg px-4 text-[15px]" />
               <label htmlFor="wl-rank" className="sr-only">Rank</label>
               <select id="wl-rank" defaultValue="2/O" className="h-12 rounded-xl bg-bg px-3 text-[15px]">
-                {RANKS.map((r) => <option key={r}>{r}</option>)}
-                <option>Superintendent</option>
+                {RANKS.map((r) => <option key={r} value={r}>{RANK_NAMES[r] || r}</option>)}
               </select>
               <ShimmerButton ref={btn} type="submit" background="#c4410c" shimmerColor="#ffffff" borderRadius="12px" className="h-12 px-6 text-[15px] font-semibold">
                 Join the waitlist
@@ -292,7 +291,7 @@ export function Footer() {
       <div className="mx-auto flex max-w-[1180px] flex-col gap-4 text-[13px] leading-relaxed text-mute">
         <span className="flex flex-wrap items-center gap-3 font-semibold text-ink"><Logo size={30} /><span className="text-signal-ink">Aim for nil.</span><span className="rounded-full border border-line px-2 py-0.5 font-mono text-[10.5px] font-normal text-mute">prototype</span></span>
         <p className="max-w-[90ch]">
-          Debrief data: 19 posts in the “SIRE 2.0” WhatsApp channel, April–October 2026, paraphrased with ship, crew and inspector names removed. Fleet data: SIRE 2.0, CDI, PSC and pre-vetting reports and observation lists from 2025–2026, with ship, crew, inspector and company names removed and wording paraphrased. The fleet console figures are sample data. Model answers, flashcards and the “what they want to see” lists were written for this prototype and should be checked by a master mariner before launch. {HOSTED ? "Signed out, your rank, practice credits, ratings, saved questions and streak stay in this browser only. Signed in with Google, they follow your account, and your credits are kept on the server." : "Your rank, credits, ratings, saved questions and streak stay in this browser only."}
+          Debrief data: 19 posts in the “SIRE 2.0” WhatsApp channel, April–October 2026, paraphrased with ship, crew and inspector names removed. Inspection data: SIRE 2.0, CDI, PSC and pre-vetting reports and observation lists from 2025–2026, with ship, crew, inspector and company names removed and wording paraphrased. The fleet console figures are sample data. Model answers, flashcards and the “what they want to see” lists were written for this prototype and should be checked by a master mariner before launch. {HOSTED ? "Signed out, your rank, practice credits, ratings, saved questions and streak stay in this browser only. Signed in with Google, they follow your account, and your credits are kept on the server." : "Your rank, credits, ratings, saved questions and streak stay in this browser only."}
         </p>
         <p className="max-w-[90ch]">
           Industry figures:{" "}

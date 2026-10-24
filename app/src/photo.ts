@@ -1,6 +1,7 @@
 // Photo check, the pure part: areas, the real examples sent with each photo, the prompt, and the
 // clean-up of whatever comes back. No React here, so it can be unit-tested (app/tests/photo.test.mjs).
 import { CHAPTER_NAMES, OBS, TYPE_NAME, type Obs } from "@/fleet"
+import { isShore } from "@/roles"
 import { RANK_NAMES, type Topic } from "@/data"
 
 /* ---------------- areas ---------------- */
@@ -110,7 +111,7 @@ export function normalize(raw: unknown, photos: number, okId: (id: string) => bo
 }
 
 const chapterList = Object.entries(CHAPTER_NAMES).map(([k, v]) => `${k} ${v}`).join(", ")
-export const photoPrompt = (area: Area, n: number, note: string, rank: string, ship: string, ex: { id: string; o: Obs }[]) => `Photo check. You are a senior OCIMF SIRE 2.0 inspector walking round a ${ship.toLowerCase()} tanker with its ${RANK_NAMES[rank] || rank}. The crew sent ${n === 1 ? "1 photo" : `${n} photos (numbered 1 to ${n} in the order given)`} of: ${area.id === "any" ? "somewhere on board (work out what it shows)" : `${area.label} (${area.sub})`}.${note ? `\nTheir note: "${note.slice(0, 300)}"` : ""}
+export const photoPrompt = (area: Area, n: number, note: string, rank: string, ship: string, ex: { id: string; o: Obs }[]) => `Photo check. You are a senior OCIMF SIRE 2.0 inspector walking round a ${ship.toLowerCase()} tanker with ${isShore(rank) ? `the company's ${RANK_NAMES[rank] || rank}` : `its ${RANK_NAMES[rank] || rank}`}. The crew sent ${n === 1 ? "1 photo" : `${n} photos (numbered 1 to ${n} in the order given)`} of: ${area.id === "any" ? "somewhere on board (work out what it shows)" : `${area.label} (${area.sub})`}.${note ? `\nTheir note: "${note.slice(0, 300)}"` : ""}
 
 Look at it the way you would on the day and say what you would raise as an observation or ask about, so the crew can fix it first.
 Rules:

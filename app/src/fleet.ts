@@ -1,6 +1,7 @@
 // Fleet data added from the uploaded archive: inspection reports, observation lists,
 // rank-wise question notes and checklists. All de-identified and paraphrased (see scratch/zdata/RULES.txt).
 import type { Debrief, Topic } from "@/data"
+import { roleOf } from "@/roles"
 import rep from "@/gen/reports.json"
 import obsRaw from "@/gen/obs.json"
 import cardsRaw from "@/gen/cards.json"
@@ -148,19 +149,21 @@ export const DECKS: Deck[] = [
 ]
 export const deckById = (id: DeckId) => DECKS.find((d) => d.id === id)!
 
-const RANK_TO_CARD: Record<string, string[]> = {
-  Master: ["Master", "All"],
-  "C/O": ["C/O", "CCR", "All"],
-  "2/O": ["2/O", "CCR", "All"],
-  "3/O": ["3/O", "CCR", "All"],
-  "C/E": ["Engineers", "All"],
-}
+/** The cards for a deck, narrowed to the user's role where the deck is tagged by rank (roles.ts says which tags fit). */
 export function cardsFor(deck: DeckId, rank: string) {
   const all = CARDS.filter((c) => c.d === deck)
   if (deck !== "trending" && deck !== "cdi") return all
-  const rs = RANK_TO_CARD[rank] || RANK_TO_CARD["2/O"]
-  const mine = all.filter((c) => rs.includes(c.r))
+  const fit = roleOf(rank).cards
+  const tags = fit && fit.deck === "trending" ? fit.tags : []
+  const mine = tags.length ? all.filter((c) => tags.includes(c.r)) : []
   return mine.length >= 12 ? mine : all
+}
+/** Prepared questions an inspector would ask this role, if there are enough of them (else the AI writes some). */
+export function interviewPool(rank: string) {
+  const fit = roleOf(rank).cards
+  if (!fit) return []
+  const list = fit.deck === "ratings" ? CARDS.filter((c) => c.d === "ratings") : cardsFor("trending", rank).filter((c) => fit.tags.includes(c.r))
+  return list.length >= 12 ? list : []
 }
 
 /* ---------------- Ready kit (checklists) ---------------- */

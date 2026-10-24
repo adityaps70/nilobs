@@ -164,7 +164,7 @@ function AppFrame({ children, framed }: { children: ReactNode; framed: boolean }
 }
 
 const TOUR: { label: string; hint: string; screen?: Screen; reset?: boolean; night?: boolean; icon: ReactNode }[] = [
-  { label: "Set up in two taps", hint: "Pick your rank", reset: true, icon: <I.Users size={17} /> },
+  { label: "Set up in two taps", hint: "Pick your rank or role", reset: true, icon: <I.Users size={17} /> },
   { label: "Build a brief", hint: "Oil major, port, rank", screen: "setup", icon: <I.Clipboard size={17} /> },
   { label: "Rehearse with an AI inspector", hint: "Feedback on each answer", screen: "practice", icon: <I.Mic size={17} /> },
   { label: "Photo-check an area", hint: "What an inspector would flag", screen: "photo", icon: <I.Camera size={17} /> },

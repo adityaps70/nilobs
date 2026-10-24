@@ -21,8 +21,10 @@ import { useProgress } from "@/progress"
 import { AiChip, AiInspector, AskCard, AskScreen, BriefPlan } from "@/components/AiFeatures"
 import { PhotoCheck } from "@/components/PhotoCheck"
 import { FLEET_STATS, KIT_TOTAL, OBS, type DeckId } from "@/fleet"
-import { CHAPTERS, LIB_RANKS, OCIMF_URL, SECTIONS, chapterOf, libForRank, officialFor, sectionOf } from "@/library"
+import { CHAPTERS, OCIMF_URL, SECTIONS, chapterOf, libForRank, officialFor, sectionOf } from "@/library"
 import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components/topicIcons"
+import { RolePicker, RoleSelect } from "@/components/RolePicker"
+import { cleanRoleName, hasPreparedQuestions, isShore, roleOf, setCompany, setCurrentProfile, setCustomRole } from "@/roles"
 import { Chip, Label, Scroll, Section, TopBar } from "@/components/ui"
 import { BRAND, Logo, LogoMark } from "@/components/Brand"
 import {
@@ -63,7 +65,12 @@ function usePersist<T>(key: string, init: T, valid?: (x: unknown) => boolean) {
 export const STORAGE_KEYS = ["sr.profile", "sr.ratings", "sr.saved", "sr.streak"]
 const isObj = (x: unknown) => !!x && typeof x === "object" && !Array.isArray(x)
 const isStrArr = (x: unknown) => Array.isArray(x) && x.every((v) => typeof v === "string")
-const isProfile = (x: unknown) => x === null || (isObj(x) && typeof (x as { rank?: unknown }).rank === "string" && RANKS.includes((x as { rank: string }).rank) && typeof (x as { ship?: unknown }).ship === "string")
+/** Who the user is: any role from roles.ts (with their own words for "Other"), the ship type and, optionally, the company. */
+export interface Profile { rank: string; ship: string; roleName?: string; company?: string }
+const optStr = (v: unknown) => v === undefined || typeof v === "string"
+const isProfile = (x: unknown) =>
+  x === null ||
+  (isObj(x) && typeof (x as Profile).rank === "string" && RANKS.includes((x as Profile).rank) && typeof (x as Profile).ship === "string" && optStr((x as Profile).roleName) && optStr((x as Profile).company))
 const isBrief = (x: unknown) => {
   if (x === null) return true
   if (!isObj(x)) return false
@@ -146,7 +153,11 @@ export function PhoneApp({
   useEffect(() => {
     if (askSignal && askSeedProp) setAskSeed({ q: askSeedProp, auto: false })
   }, [askSignal]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [profile, setProfile] = usePersist<{ rank: string; ship: string } | null>("sr.profile", null, isProfile)
+  const [profile, setProfile] = usePersist<Profile | null>("sr.profile", null, isProfile)
+  // labels and AI prompts use the user's own words for "Other" and their company, if given
+  setCustomRole(profile?.roleName)
+  setCompany(profile?.company)
+  setCurrentProfile(profile?.rank, profile?.ship)
   const [ratings, setRatings] = usePersist<Record<string, "yes" | "unsure">>("sr.ratings", {}, isObj)
   const [saved, setSaved] = usePersist<string[]>("sr.saved", [], isStrArr)
   const [streak, setStreak] = usePersist<{ n: number; last: string }>("sr.streak", { n: 0, last: "" }, isObj)
@@ -296,7 +307,7 @@ export function PhoneApp({
               {screen === "spot" && <SpotScreen go={go} />}
               {screen === "radar" && <RadarScreen rank={rank} go={go} />}
               {screen === "kit" && <KitScreen go={go} />}
-              {screen === "me" && <MeScreen go={go} rank={rank} ship={profile?.ship ?? "Product"} setProfile={setProfile} night={night} setNight={setNight} />}
+              {screen === "me" && <MeScreen go={go} profile={profile} setProfile={setProfile} night={night} setNight={setNight} />}
               {screen === "share" && <Share night={night} />}
               {screen === "wallet" && <WalletScreen go={go} />}
             </>
@@ -394,15 +405,20 @@ export function PhoneApp({
 }
 
 /* ---------------- Onboarding ---------------- */
-function Onboard({ onDone, initialRank }: { onDone: (p: { rank: string; ship: string }) => void; initialRank?: string }) {
+function Onboard({ onDone, initialRank }: { onDone: (p: Profile) => void; initialRank?: string }) {
   const [rank, setRank] = useState<string | null>(initialRank && RANKS.includes(initialRank) ? initialRank : null)
+  const [roleName, setRoleName] = useState("")
   const [ship, setShip] = useState("Product")
+  const [company, setCo] = useState("")
+  const named = rank !== "Other" || cleanRoleName(roleName).length >= 2
+  const ready = !!rank && named
+  const label = rank === "Other" ? cleanRoleName(roleName) || "your role" : rank ? RANK_NAMES[rank] : ""
   return (
     <Scroll className="gap-5 pt-4">
       <LogoMark size={56} />
       <div className="flex flex-col gap-2">
         <h2 className="display text-[30px] leading-[1.05] font-bold">Welcome aboard</h2>
-        <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} Two taps and NilObs is set up for your job. No ship details and no sign-up to start.</p>
+        <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} For every rank on board and the company's people ashore. No ship details and no sign-up to start.</p>
       </div>
       <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5">
         <IconTile icon={I.Coin} color="teal" size={40} />
@@ -412,24 +428,15 @@ function Onboard({ onDone, initialRank }: { onDone: (p: { rank: string; ship: st
         </span>
       </div>
       <fieldset className="flex flex-col gap-2.5">
-        <legend className="mb-2.5"><Label>1 · Your rank</Label></legend>
-        <div className="grid grid-cols-2 gap-2">
-          {RANKS.map((r) => (
-            <button
-              key={r}
-              type="button"
-              aria-pressed={rank === r}
-              onClick={() => setRank(r)}
-              className={cn(
-                "flex h-[66px] flex-col items-start justify-center rounded-2xl border px-4 text-left transition-colors",
-                rank === r ? "border-primary bg-primary text-on-primary" : "border-line bg-surface hover:border-mute"
-              )}
-            >
-              <span className="text-[15px] font-semibold">{RANK_NAMES[r]}</span>
-              {RANK_NAMES[r] !== r && <span className={cn("font-mono text-[11px]", rank === r ? "opacity-75" : "text-mute")}>{r}</span>}
-            </button>
-          ))}
-        </div>
+        <legend className="mb-2.5"><Label>1 · Your role</Label></legend>
+        <RolePicker
+          value={rank}
+          roleName={roleName}
+          onChange={(r, n) => {
+            setRank(r)
+            setRoleName(n)
+          }}
+        />
       </fieldset>
       <fieldset className="flex flex-col gap-2.5">
         <legend className="mb-2.5"><Label>2 · Ship type</Label></legend>
@@ -437,17 +444,21 @@ function Onboard({ onDone, initialRank }: { onDone: (p: { rank: string; ship: st
           {SHIP_TYPES.map((s) => <Chip key={s} on={ship === s} onClick={() => setShip(s)}>{s} tanker</Chip>)}
         </div>
       </fieldset>
+      <label className="flex flex-col gap-1.5">
+        <Label>3 · Company <span className="font-normal">(optional)</span></Label>
+        <input value={company} maxLength={60} onChange={(e) => setCo(e.target.value)} placeholder="Only used to tailor AI answers" className="h-11 rounded-xl border border-line bg-surface px-3.5 text-[15px] text-ink outline-none focus:border-primary" />
+      </label>
       <div className="flex gap-2.5 rounded-2xl bg-sea-soft px-4 py-3 text-[13px] leading-snug text-sea">
         <I.Shield size={18} className="shrink-0" />
         Everything you share is anonymous. Ship, crew and inspector names are removed before anyone sees it.
       </div>
       <button
         type="button"
-        disabled={!rank}
-        onClick={() => rank && onDone({ rank, ship })}
+        disabled={!ready}
+        onClick={() => rank && ready && onDone({ rank, ship, ...(rank === "Other" ? { roleName: cleanRoleName(roleName) } : {}), ...(company.trim() ? { company: company.trim().slice(0, 60) } : {}) })}
         className="flex h-[54px] items-center justify-center gap-2 rounded-2xl bg-primary text-[16px] font-semibold text-on-primary transition-opacity disabled:opacity-35"
       >
-        {rank ? `Start as ${RANK_NAMES[rank]}` : "Pick your rank to start"} <I.ArrowRight size={18} />
+        {ready ? `Start as ${label}` : rank === "Other" ? "Type your role to start" : "Pick your role to start"} <I.ArrowRight size={18} />
       </button>
     </Scroll>
   )
@@ -503,7 +514,7 @@ function Today(p: {
     { label: "Flashcards", sub: due ? `${due} due today` : "10 fresh cards ready", icon: I.Layers, color: "blue", tag: <FreeTag />, onClick: () => p.go("train") },
     { label: "Photo check", sub: "What would an inspector flag?", icon: I.Camera, color: "indigo", tag: <CostTag cost={COSTS.photo} className="text-mute" />, onClick: () => p.go("photo") },
     { label: "Ready kit", sub: `${KIT_TOTAL} pre-inspection checks`, icon: I.Briefcase, color: "amber", tag: <FreeTag />, onClick: () => p.go("kit") },
-    { label: "Official checklist", sub: `${lib.length} questions for your rank`, icon: I.ListCheck, color: "teal", tag: <FreeTag />, onClick: p.openLibrary },
+    { label: "Official checklist", sub: `${lib.length} questions for your role`, icon: I.ListCheck, color: "teal", tag: <FreeTag />, onClick: p.openLibrary },
     { label: "Inspection brief", sub: p.brief ? "Open your brief" : "Your oil major, port and rank", icon: I.Clipboard, color: "sky", tag: p.brief ? <FreeTag label="Ready" /> : <CostTag cost={COSTS.brief} className="text-mute" />, onClick: () => p.go(p.brief ? "brief" : "setup") },
     { label: "AI inspector", sub: "Graded answers, voice mode", icon: I.Mic, color: "violet", tag: <CostTag cost={COSTS.interview} className="text-mute" />, onClick: () => p.go("practice") },
     { label: "Inspection stories", sub: `${STORIES.length} real inspections`, icon: I.Newspaper, color: "rose", tag: wallet.perks.allStories ? <FreeTag label="Included" /> : <CostTag cost={COSTS.story} className="text-mute" />, onClick: () => p.go("stories") },
@@ -663,12 +674,10 @@ function Setup({ rank: r0, onBuild, hasBrief, onBack }: { rank: string; onBuild:
               <input id="app-date" type="date" value={date} min={min} max={max} onChange={(e) => setDate(e.target.value)} className={cn("h-11 rounded-xl border bg-surface px-2 text-[13px] text-ink", bad ? "border-signal" : "border-line")} />
             </label>
           </div>
-          <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2"><Label>Your rank</Label></legend>
-            <div className="flex flex-wrap gap-1.5">
-              {RANKS.map((x) => <Chip key={x} on={rank === x} onClick={() => setRank(x)}>{x}</Chip>)}
-            </div>
-          </fieldset>
+          <label className="flex flex-col gap-1.5" htmlFor="app-role">
+            <Label>The brief is for</Label>
+            <RoleSelect id="app-role" value={rank} onChange={(r) => setRank(r)} />
+          </label>
         </div>
         {bad && <p className="text-center text-[12.5px] font-medium text-signal-ink">{bad}</p>}
         <ShimmerButton onClick={() => !bad && onBuild(major, port, rank, date)} disabled={!!bad} borderRadius="14px" background="var(--primary)" shimmerColor="var(--signal)" className="h-[54px] w-full justify-between border-0 px-5 text-[15.5px] font-semibold text-on-primary disabled:opacity-50">
@@ -892,9 +901,28 @@ function Practise({ mode, go, rank, night, onDrillDone }: { mode: "interview" | 
 }
 
 function Interview({ rank, night }: { rank: string; night: boolean }) {
+  const key = roleOf(rank).interview
+  if (!key || !INTERVIEW[key]) return <NoPreparedInterview rank={rank} />
+  return <PreparedInterview rank={rank} bankKey={key} night={night} />
+}
+/** Roles without a prepared mock interview (catering, shore staff, "Other"): the AI inspector writes one. */
+function NoPreparedInterview({ rank }: { rank: string }) {
+  return (
+    <Scroll className="pt-2">
+      <div className="flex flex-col gap-3 rounded-[20px] bg-hero p-5 text-hero-ink">
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-hero-track"><I.Mic size={24} /></span>
+        <span className="display text-[22px] leading-tight font-bold">Interview practice for a {RANK_NAMES[rank] || rank}</span>
+        <span className="text-[14px] leading-relaxed text-hero-muted">
+          The AI inspector writes questions for your role{isShore(rank) ? ", the way an inspector, a vetting team or an auditor would ask the company," : ""} grades each answer and suggests a stronger one. Sign in with Google above to start. Until then, flashcards and Spot the observation are free.
+        </span>
+      </div>
+    </Scroll>
+  )
+}
+function PreparedInterview({ rank, bankKey, night }: { rank: string; bankKey: string; night: boolean }) {
   const wallet = useWallet()
   const [started, setStarted] = useState(false)
-  const bank = INTERVIEW[rank] || INTERVIEW["2/O"]
+  const bank = INTERVIEW[bankKey]
   const [qi, setQi] = useState(0)
   const [text, setText] = useState("")
   const [answer, setAnswer] = useState<string | null>(null)
@@ -922,13 +950,13 @@ function Interview({ rank, night }: { rank: string; night: boolean }) {
       <Scroll className="pt-2">
         <div className="flex flex-col gap-4 rounded-[20px] bg-hero p-5 text-hero-ink">
           <span className="flex size-12 items-center justify-center rounded-2xl bg-hero-track"><I.Mic size={24} /></span>
-          <span className="display text-[22px] leading-tight font-bold">Mock interview for a {rank in INTERVIEW ? RANK_NAMES[rank] : RANK_NAMES["2/O"]}</span>
+          <span className="display text-[22px] leading-tight font-bold">Mock interview for a {RANK_NAMES[rank] || rank}</span>
           <span className="text-[14px] leading-relaxed text-hero-muted">
-            {bank.length} question{bank.length > 1 ? "s" : ""} inspectors asked your rank in real inspections. After each answer you get feedback on the fact, the procedure and the record, plus a model answer.
+            {bank.length} question{bank.length > 1 ? "s" : ""} inspectors asked {bankKey === rank ? "your rank" : `a ${RANK_NAMES[bankKey]}`} in real inspections. After each answer you get feedback on the fact, the procedure and the record, plus a model answer.
           </span>
           <button
             type="button"
-            onClick={() => !!wallet.charge({ kind: "mockInterview" }, { note: rank in INTERVIEW ? rank : "2/O" }) && setStarted(true)}
+            onClick={() => !!wallet.charge({ kind: "mockInterview" }, { note: RANK_NAMES[rank] || rank }) && setStarted(true)}
             className="flex h-12 items-center justify-between rounded-xl bg-hero-accent px-4 text-[15px] font-semibold text-[#1a0a00]"
           >
             Start session <CostTag cost={COSTS.interview} />
@@ -960,7 +988,7 @@ function Interview({ rank, night }: { rank: string; night: boolean }) {
     <>
       <div className="px-5 pb-2">
         <div className="flex items-center justify-between text-[12px] text-mute">
-          <span>{rank in INTERVIEW ? rank : "2/O"} · the AI plays the inspector</span>
+          <span>{RANK_NAMES[rank] || rank} · the AI plays the inspector</span>
           <span className="tnum font-mono font-semibold text-ink">{qi + 1}/{bank.length}</span>
         </div>
         <div className="mt-2 h-1.5 rounded-full bg-surface-2">
@@ -1444,8 +1472,9 @@ function StoriesScreen({ storyId, setStoryId, rank }: { storyId: number | null; 
 
 /* ---------------- Official checklist (rank-wise) ---------------- */
 function OfficialChecklist({ rank, done, setDone, night }: { rank: string; done: Record<string, boolean>; setDone: (f: (d: Record<string, boolean>) => Record<string, boolean>) => void; night: boolean }) {
-  const r = LIB_RANKS.includes(rank) ? rank : "2/O"
+  const r = rank
   const list = libForRank(r)
+  const shore = isShore(r)
   const ready = list.filter((q) => done[q.n]).length
   const chapters = [...new Set(list.map((q) => chapterOf(q.n)))]
   const [open, setOpen] = useState<string | null>(chapters[0] ?? null)
@@ -1465,7 +1494,7 @@ function OfficialChecklist({ rank, done, setDone, night }: { rank: string; done:
         <AnimatedCircularProgressBar value={Math.round((ready / Math.max(1, list.length)) * 100)} gaugePrimaryColor="var(--primary)" gaugeSecondaryColor="rgba(11,107,203,0.14)" className="size-[76px] shrink-0 text-[17px] text-ink" />
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-[16px] font-bold">{ready} of {list.length} ready</span>
-          <span className="text-[13px] leading-snug text-mute">SIRE 2.0 questions your company assigns to the {RANK_NAMES[r] || r}. Tick each one you could answer and show evidence for today.</span>
+          <span className="text-[13px] leading-snug text-mute">{shore ? `SIRE 2.0 questions a ${RANK_NAMES[r] || r} usually looks after. Tick each one your ships could show evidence for today.` : `SIRE 2.0 questions a ${RANK_NAMES[r] || r} usually covers. Tick each one you could answer and show evidence for today.`}</span>
         </div>
       </div>
       {chapters.map((c) => {
@@ -1510,7 +1539,7 @@ function OfficialChecklist({ rank, done, setDone, night }: { rank: string; done:
         )
       })}
       <p className="px-1 text-[12px] leading-relaxed text-mute">
-        Question numbers and short titles from the SIRE 2.0 Question Library (OCIMF). Rank assignments from your company's rank-wise sheet. Read the full questions and guidance in{" "}
+        Question numbers and short titles from the SIRE 2.0 Question Library (OCIMF). Who covers what follows the usual division of duties; your company's SMS may split them differently. Read the full questions and guidance in{" "}
         <a href={OCIMF_URL} target="_blank" rel="noreferrer" className="font-semibold text-primary underline-offset-2 hover:underline">OCIMF's library</a>.
       </p>
     </Scroll>

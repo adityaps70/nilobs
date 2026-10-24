@@ -671,16 +671,10 @@ export const DEBRIEFS: Debrief[] = [
 export const NEGATIVE_TOPICS: Topic[] = ["Defect reporting", "PIQ accuracy", "Engine room", "Radar"]
 
 export const MAJORS = ["Shell", "BP", "ENOC", "Equinor", "Maxcom", "Ampol", "CDI", "Other"]
-export const RANKS = ["Master", "C/O", "2/O", "3/O", "C/E"]
+// Every crew rank and shore role, with the topics each usually looks after: see roles.ts
+export { RANKS, RANK_NAMES, RANK_TOPICS } from "@/roles"
+import { RANK_TOPICS } from "@/roles"
 
-// Which topics fall to which rank (typical tanker division of duties)
-export const RANK_TOPICS: Record<string, Topic[]> = {
-  Master: ["Documents & SMS", "Defect reporting", "PIQ accuracy", "Watchkeeping", "Rest hours & drills", "UKC", "Passage planning", "Permits & RA"],
-  "C/O": ["Cargo", "Defect reporting", "PIQ accuracy", "LSA & FFA", "Rest hours & drills", "Watchkeeping", "Permits & RA", "Gas testing & enclosed space", "Emergency equipment", "PPE & personal safety", "Mooring & access"],
-  "2/O": ["ECDIS", "Radar", "Passage planning", "UKC", "GMDSS", "Alarm & power-fail tests", "Equipment tests vs PMS", "Steering", "Watchkeeping"],
-  "3/O": ["LSA & FFA", "GMDSS", "Rest hours & drills", "Watchkeeping", "Emergency equipment", "Gas testing & enclosed space"],
-  "C/E": ["Engine room", "Steering", "Defect reporting", "Rest hours & drills", "Alarm & power-fail tests", "Emergency equipment", "Permits & RA", "PPE & personal safety"],
-}
 
 export const TOPIC_TASK: Partial<Record<Topic, string>> = {
   ECDIS: "Run through ECDIS safety settings, SCAMIN and the failure procedure",
@@ -1057,5 +1051,4 @@ export const BANK: BankQ[] = DEBRIEFS.flatMap((d) =>
   }))
 )
 
-export const RANK_NAMES: Record<string, string> = { Master: "Master", "C/O": "Chief Officer", "2/O": "Second Officer", "3/O": "Third Officer", "C/E": "Chief Engineer" }
 export const SHIP_TYPES = ["Crude", "Product", "Chemical", "Gas"]

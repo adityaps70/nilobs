@@ -98,7 +98,7 @@ const css = compiler.build([...candidates])
 const FONTS = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">`
 // The public address. Social previews need absolute links; set NILOBS_SITE_URL to build for another domain.
 const SITE = (process.env.NILOBS_SITE_URL || "https://nilobs.com").replace(/\/$/, "")
-const DESC = "SIRE 2.0 inspection prep for tanker crews: real observations, rank-wise flashcards, an AI inspector and daily missions. Aim for nil."
+const DESC = "SIRE 2.0 inspection prep for every tanker rank and the shore team: real observations, rank-wise flashcards, an AI inspector and daily missions. Aim for nil."
 fs.mkdirSync(path.dirname(out), { recursive: true })
 if (hosted) {
   fs.writeFileSync(

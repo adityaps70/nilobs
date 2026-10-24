@@ -13,10 +13,13 @@ import { AI_XP_CAP, BADGES, CHEST, LEVELS, MISSIONS, XP, dayKey, pop, streakMult
 import {
   BENCH, CHAPTER_NAMES, DECKS, KIT, OBS, TYPE_COLOR, TYPE_HINT, TYPE_KEYS, TYPE_NAME, cardsFor, countBy, deckById, type DeckId, type Obs,
 } from "@/fleet"
-import { RANKS, RANK_NAMES, RANK_TOPICS, SHIP_TYPES, type Topic } from "@/data"
+import { RANK_NAMES, RANK_TOPICS, SHIP_TYPES, type Topic } from "@/data"
+import { RoleSelect } from "@/components/RolePicker"
+import { cleanRoleName, currentShip, roleOf } from "@/roles"
+import type { Profile } from "@/components/PhoneApp"
 import type { AppScreen } from "@/nav"
 import { STORIES } from "@/stories"
-import { AiChip, ExplainObs } from "@/components/AiFeatures"
+import { AiChip, ExplainObs, RolePack } from "@/components/AiFeatures"
 
 type Ico = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>
 const ICON = I as unknown as Record<string, Ico>
@@ -251,6 +254,8 @@ export function TrainScreen({ rank, go, openDeck }: { rank: string; go: (s: AppS
             <I.Play size={17} /> Start 10 cards
           </button>
         </section>
+
+        {!roleOf(rank).cards && <RolePack rank={rank} ship={currentShip()} />}
 
         <button type="button" onClick={() => go("spot")} className="glass flex items-center gap-4 rounded-[22px] p-4 text-left">
           <IconTile icon={I.Target} color="orange" size={52} />
@@ -820,7 +825,7 @@ export function RadarScreen({ rank, go }: { rank: string; go: (s: AppScreen) => 
             </div>
           )}
         </section>
-        <p className="text-center text-[11.5px] leading-snug text-mute">From one fleet's SIRE 2.0, CDI and pre-vetting findings. Ship, crew and company names removed; wording paraphrased.</p>
+        <p className="text-center text-[11.5px] leading-snug text-mute">From real SIRE 2.0, CDI and pre-vetting findings. Ship, crew and company names removed; wording paraphrased.</p>
       </Scroll>
     </>
   )
@@ -920,7 +925,7 @@ export function KitScreen({ go }: { go: (s: AppScreen) => void }) {
           )}
         </div>
         {confirm && <p className="-mt-1 text-center text-[12px] text-mute">Unticks all {doneAll} items for the next inspection. XP you've earned stays.</p>}
-        <p className="text-center text-[11.5px] leading-snug text-mute">From a ship manager's pre-inspection notes, generalised. Your own SMS and the current rules come first.</p>
+        <p className="text-center text-[11.5px] leading-snug text-mute">Common pre-inspection checks for tankers. Your own SMS and the current rules come first.</p>
       </Scroll>
     </>
   )
@@ -929,7 +934,11 @@ export function KitScreen({ go }: { go: (s: AppScreen) => void }) {
 /* =====================================================================
    Progress / badges
    ===================================================================== */
-export function MeScreen({ go, rank, ship, setProfile, night, setNight }: { go: (s: AppScreen) => void; rank: string; ship: string; setProfile: (p: { rank: string; ship: string }) => void; night: boolean; setNight: (v: boolean) => void }) {
+export function MeScreen({ go, profile, setProfile, night, setNight }: { go: (s: AppScreen) => void; profile: Profile | null; setProfile: (p: Profile) => void; night: boolean; setNight: (v: boolean) => void }) {
+  const rank = profile?.rank ?? "2/O"
+  const ship = profile?.ship ?? "Product"
+  const base: Profile = profile ?? { rank, ship }
+  const [co, setCo] = useState(profile?.company ?? "")
   const p = useProgress()
   const w = useWallet()
   const [howOpen, setHowOpen] = useState(false)
@@ -1100,18 +1109,32 @@ export function MeScreen({ go, rank, ship, setProfile, night, setNight }: { go: 
 
         <section className="flex flex-col gap-3 rounded-[22px] border border-line bg-surface p-4">
           <h3 className="flex items-center gap-2 text-[15px] font-bold"><I.Settings size={17} /> Settings</h3>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[12.5px] font-semibold text-mute">Your rank</span>
-            <div className="flex flex-wrap gap-1.5">
-              {RANKS.map((r) => <Chip key={r} size="sm" on={rank === r} onClick={() => setProfile({ rank: r, ship })}>{RANK_NAMES[r] || r}</Chip>)}
-            </div>
-          </div>
+          <label className="flex flex-col gap-1.5" htmlFor="me-role">
+            <span className="text-[12.5px] font-semibold text-mute">Your role</span>
+            <RoleSelect
+              id="me-role"
+              value={rank}
+              roleName={profile?.roleName ?? ""}
+              onChange={(r, n) => setProfile({ ...base, rank: r, roleName: r === "Other" ? cleanRoleName(n) || undefined : undefined })}
+            />
+          </label>
           <div className="flex flex-col gap-1.5">
             <span className="text-[12.5px] font-semibold text-mute">Ship type</span>
             <div className="flex flex-wrap gap-1.5">
-              {SHIP_TYPES.map((s) => <Chip key={s} size="sm" on={ship === s} onClick={() => setProfile({ rank, ship: s })}>{s} tanker</Chip>)}
+              {SHIP_TYPES.map((s) => <Chip key={s} size="sm" on={ship === s} onClick={() => setProfile({ ...base, ship: s })}>{s} tanker</Chip>)}
             </div>
           </div>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[12.5px] font-semibold text-mute">Company <span className="font-normal">(optional, only used to tailor AI answers)</span></span>
+            <input
+              value={co}
+              maxLength={60}
+              onChange={(e) => setCo(e.target.value)}
+              onBlur={() => setProfile({ ...base, company: co.trim() ? co.trim().slice(0, 60) : undefined })}
+              placeholder="Your company"
+              className="h-11 rounded-xl border border-line bg-surface px-3.5 text-[14px] text-ink outline-none focus:border-primary"
+            />
+          </label>
           <button type="button" aria-pressed={night} onClick={() => setNight(!night)} className={cn("flex h-11 items-center justify-between rounded-xl border px-3 text-[13.5px] font-semibold", night ? "border-signal bg-signal-soft text-signal" : "border-line")}>
             <span className="flex items-center gap-2"><I.Moon size={16} /> Night-watch mode</span>
             <span className="text-[12px] font-normal">{night ? "On" : "Off"}</span>

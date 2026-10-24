@@ -393,6 +393,7 @@ export const COST_ROWS: { label: string; sub: string; cost: number; icon: (p: { 
   { label: "AI inspector interview", sub: "Five graded questions, follow-ups and a debrief", cost: COSTS.interview, icon: I.Mic, color: "orange", screen: "practice" },
   { label: "Voice interview", sub: "The inspector speaks each question. No extra cost on plans", cost: COSTS.voiceInterview, icon: I.Volume, color: "rose", screen: "practice" },
   { label: "Inspection brief + AI plan", sub: "For your oil major, port, rank and date", cost: COSTS.brief, icon: I.Clipboard, color: "sky", screen: "setup" },
+  { label: "Role pack", sub: "AI flashcards and a checklist for roles without a prepared deck", cost: COSTS.rolePack, icon: I.Sparkle, color: "violet", screen: "train" },
   { label: "Full inspection story", sub: "Yours to keep. Included in plans", cost: COSTS.story, icon: I.Newspaper, color: "amber", screen: "stories" },
   { label: "Specialist deck", sub: "ECDIS, CDI or China coast. Included in plans", cost: COSTS.deck, icon: I.Layers, color: "blue", screen: "train" },
   { label: "Streak freeze", sub: "Protects your streak for one missed day", cost: COSTS.freeze, icon: I.Snow, color: "slate", screen: "me" },
