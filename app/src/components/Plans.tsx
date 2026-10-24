@@ -1,5 +1,5 @@
 // Plans, top-ups and the wallet screen.
-// Signed in on nilobs.com, purchases are real: paid through Cashfree and confirmed by the server.
+// Signed in on nilobs.com, purchases are real: paid through Razorpay and confirmed by the server.
 // Plans are prepaid and don't renew by themselves. Elsewhere (a local test build) checkout is simulated.
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { HOSTED } from "@/ai"
@@ -13,6 +13,7 @@ import { BorderBeam } from "@/components/magicui/border-beam"
 import { Section, TopBar, Scroll } from "@/components/ui"
 import { IconTile, type TileColor } from "@/components/topicIcons"
 import { COSTS, EARN, PASS, PLANS, TOPUPS, fmtPrice, useWallet, type Currency, type Cycle, type PlanId } from "@/credits"
+import { EARNED_DAYS } from "@/economy"
 import { CYCLE_DAYS, DAY, PLAN_ORDER, PLAN_RANK, YEAR_CYCLES, canBuy, dayOf, paidUntil, paidUntil as paidUntilOf, perMonth, productKey } from "@/economy"
 import { LEVELS, useProgress } from "@/progress"
 import type { AppScreen } from "@/nav"
@@ -84,9 +85,6 @@ function ValueReceipt() {
 }
 
 /* ---------------- the sheet ---------------- */
-const PHONE_KEY = "sr.phone"
-const cleanPhone = (p: string) => p.replace(/[\s()-]/g, "")
-const phoneOk = (p: string) => /^\+?\d{10,15}$/.test(cleanPhone(p))
 type Pick = { kind: "plan"; id: PlanId } | { kind: "pass" } | { kind: "topup"; id: string }
 
 export function PlansSheet() {
@@ -99,14 +97,6 @@ export function PlansSheet() {
   const [done, setDone] = useState("")
   const [err, setErr] = useState("")
   const auth = useAuth()
-  // Cashfree asks for the buyer's mobile number; it's remembered on this device only
-  const [phone, setPhone] = useState(() => {
-    try {
-      return localStorage.getItem(PHONE_KEY) || ""
-    } catch {
-      return ""
-    }
-  })
   const btn = useRef<HTMLButtonElement>(null)
   // each purchase gets a token; closing the sheet or starting another purchase cancels the older one
   const token = useRef(0)
@@ -160,7 +150,7 @@ export function PlansSheet() {
     pick.kind === "plan" ? `${PLANS[pick.id].name}, ${fmtPrice(amount, cur)} for ${cycle === "annual" ? "a year" : "a month"}` : pick.kind === "pass" ? `${PASS.name}, ${fmtPrice(amount, cur)} once` : `${TOPUPS.find((t) => t.id === pick.id)!.credits} credits, ${fmtPrice(amount, cur)}`
   // how this purchase is paid: a real checkout (signed in), sign in first, or practice (no charge)
   const other: Currency = cur === "INR" ? "USD" : "INR"
-  const via: "cashfree" | "simulated" | "closed" | "signin" | "loading" | "practice" =
+  const via: "razorpay" | "simulated" | "closed" | "signin" | "loading" | "practice" =
     w.mode === "account" ? (!w.ready ? "loading" : w.checkout?.[cur] ?? "closed")
       : HOSTED && auth.status === "out" ? "signin"
       : HOSTED && auth.status === "loading" ? "loading"
@@ -171,16 +161,6 @@ export function PlansSheet() {
       auth.prompt("Sign in with Google to buy credits or a plan")
       return
     }
-    if (via === "cashfree" && !phoneOk(phone)) {
-      setErr("Enter your mobile number: Cashfree needs it for the payment.")
-      return
-    }
-    if (via === "cashfree")
-      try {
-        localStorage.setItem(PHONE_KEY, cleanPhone(phone))
-      } catch {
-        /* not remembered */
-      }
     const my = ++token.current
     setStage("pay")
     setErr("")
@@ -188,9 +168,8 @@ export function PlansSheet() {
       await new Promise((r) => setTimeout(r, 900))
       if (my !== token.current) return // closed while "processing": nothing is bought
     }
-    const r = await w.buy(key, { phone: cleanPhone(phone) })
+    const r = await w.buy(key)
     if (my !== token.current) return // the sheet was closed meanwhile (what was bought is still in the wallet)
-    if ("redirect" in r) return // on the way to Cashfree's payment page
     if (r.ok) {
       setDone(r.message)
       setStage("done")
@@ -313,23 +292,6 @@ export function PlansSheet() {
                     <p className="text-[12px] leading-snug text-mute">Plans work out cheaper per credit. Top-ups are for when you run short, and they never expire.</p>
                   </div>
                 )}
-                {via === "cashfree" && can.ok && (
-                  <label className="flex flex-col gap-1 text-[12.5px] font-semibold text-mute">
-                    Mobile number, for the payment
-                    <input
-                      type="tel"
-                      inputMode="tel"
-                      autoComplete="tel"
-                      value={phone}
-                      onChange={(e) => {
-                        setPhone(e.target.value)
-                        setErr("")
-                      }}
-                      placeholder="98765 43210"
-                      className="h-11 rounded-xl border border-line bg-surface px-3.5 text-[15px] font-normal text-ink outline-none focus:border-primary"
-                    />
-                  </label>
-                )}
                 <button ref={btn} type="button" onClick={pay} disabled={stage === "pay" || !can.ok || via === "closed" || via === "loading"} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-signal text-[15px] font-semibold text-white disabled:opacity-60">
                   {stage === "pay" ? (
                     <>
@@ -354,13 +316,13 @@ export function PlansSheet() {
                   <button type="button" onClick={() => w.setCurrency(other)} className="-mt-1 self-center text-[12.5px] font-semibold text-primary underline underline-offset-2">Pay in {other === "INR" ? "rupees (₹)" : "dollars ($)"} instead</button>
                 )}
                 <p className="text-center text-[11.5px] leading-snug text-mute">
-                  {via === "cashfree" ? "Paid securely through Cashfree: UPI, cards, netbanking and wallets. "
+                  {via === "razorpay" ? "Paid securely through Razorpay: UPI, cards, netbanking and wallets. "
                     : via === "simulated" ? `Test mode: no payment is taken (${what}). `
                     : via === "practice" ? `Prototype: no payment is taken (${what}). `
                     : ""}
                   {pick.kind === "plan" ? "Plans are paid up front and don't renew by themselves. " : ""}
                   {cur === "INR" ? "Prices include GST." : ""}
-                  {HOSTED && via === "cashfree" && <> By paying you agree to the <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a> and <a href="/refunds" target="_blank" rel="noopener" className="underline">refund policy</a>.</>}
+                  {HOSTED && via === "razorpay" && <> By paying you agree to the <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a> and <a href="/refunds" target="_blank" rel="noopener" className="underline">refund policy</a>.</>}
                 </p>
                 <p className="text-center text-[12px] text-mute">
                   Or earn free credits: daily chest +{EARN.chest}, badges +{EARN.badge}, level-ups, and +{EARN.share} for each debrief you share.
@@ -507,7 +469,7 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
             </span>
             <I.ArrowRight size={17} className="text-mute" />
           </button>
-          <p className="text-[12px] text-mute">Earned credits last 60 days. Next level: {p.level.next ? `${p.level.next.name} in ${p.level.toNext.toLocaleString("en-IN")} XP (+${EARN.level[p.level.n + 1] ?? 0} credits)` : "you're at the top"}. Levels: {LEVELS.length}.</p>
+          <p className="text-[12px] text-mute">Earned credits last {EARNED_DAYS} days. Next level: {p.level.next ? `${p.level.next.name} in ${p.level.toNext.toLocaleString("en-IN")} XP (+${EARN.level[p.level.n + 1] ?? 0} credits)` : "you're at the top"}. Levels: {LEVELS.length}.</p>
         </Section>
 
         <Section title="History" aside={`${w.ledger.length} entries`}>
@@ -525,7 +487,7 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
         </Section>
         <p className="text-center text-[11.5px] leading-snug text-mute">
           {w.mode === "account"
-            ? "Your credits are kept on your NilObs account, so they're the same on every device. Payments go through Cashfree."
+            ? "Your credits are kept on your NilObs account, so they're the same on every device. Payments go through Razorpay."
             : HOSTED
               ? "Signed out, these practice credits stay in this browser. Sign in with Google to buy credits and use the AI."
               : "Prototype: purchases are simulated. Credits are kept in this browser."}{" "}

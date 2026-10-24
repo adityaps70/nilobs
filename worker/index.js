@@ -28,8 +28,8 @@ export default {
     if (url.pathname === "/admin" || url.pathname === "/admin/" || url.pathname.startsWith("/api/admin/")) return handleAdmin(request, env)
     // (Cloudflare's static assets already serve public/privacy.html at /privacy)
     if (AUTH_ROUTES.includes(url.pathname)) return handleAuth(request, env)
-    // Cashfree's payment notifications (signed by Cashfree, no session)
-    if (url.pathname === "/api/pay/cashfree/webhook") {
+    // Razorpay's payment notifications (signed by Razorpay, no session)
+    if (url.pathname === "/api/pay/razorpay/webhook") {
       if (!authEnabled(env)) return reply(404, { error: "Not set up" })
       return handlePay(request, env, null)
     }

@@ -28,9 +28,10 @@
     "NILOBS_CANONICAL_HOST": "nilobs.com",
     // Google OAuth Web client (Google Cloud project "NilObs"). A client ID is public; no client secret is used.
     "GOOGLE_CLIENT_ID": "350187455866-i72se8qt5igs4a6b1hn96hgmrv740qri.apps.googleusercontent.com",
-    // Payments go through Cashfree once the secrets CASHFREE_APP_ID and CASHFREE_SECRET_KEY are set (test keys use
-    // Cashfree's sandbox). Make this "INR,USD" once Cashfree has turned on international payments for the account.
-    "CASHFREE_CURRENCIES": "INR"
+    // Payments go through Razorpay once the secrets RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are set (rzp_test_ keys
+    // take test payments). RAZORPAY_WEBHOOK_SECRET is the secret typed when adding the webhook in Razorpay.
+    // Make this "INR,USD" once Razorpay has turned on international payments for the account.
+    "RAZORPAY_CURRENCIES": "INR"
   }
   // Secrets (never commit them): set ANTHROPIC_API_KEY (Claude, for the AI) and RUMIK_API_KEY (Rumik, for the
   // AI inspector's voice) in the Cloudflare dashboard under Workers & Pages > nilobs > Settings > Variables and Secrets,

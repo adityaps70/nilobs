@@ -44,10 +44,10 @@ interface Sheet {
   done?: string
 }
 export type WalletMode = "account" | "local"
-/** How a currency is paid on the server: Cashfree, a test switch, or not open yet. */
-export type CheckoutMode = "cashfree" | "simulated" | null
+/** How a currency is paid on the server: Razorpay, a test switch, or not open yet. */
+export type CheckoutMode = "razorpay" | "simulated" | null
 export type EarnKind = "badge" | "level" | "streak" | "chest"
-export type BuyResult = { ok: true; message: string } | { ok: false; cancelled?: boolean; error?: string } | { redirect: true }
+export type BuyResult = { ok: true; message: string } | { ok: false; cancelled?: boolean; error?: string }
 
 /** One id per page load, so charges held by a page that has closed can be refunded. */
 const PAGE = Math.random().toString(36).slice(2, 10)
@@ -86,8 +86,8 @@ export interface Wallet {
   earn: (kind: EarnKind, key: string | number, label: string) => void
   /** After signing in: pay out badges, levels and streaks reached on this device before. */
   claimAll: (c: { badges: string[]; level: number; streakBest: number }) => void
-  /** Buy a product ("topup:t500", "pass", "plan:watch:monthly"). Cashfree needs the buyer's mobile number. */
-  buy: (key: string, opts?: { phone?: string }) => Promise<BuyResult>
+  /** Buy a product ("topup:t500", "pass", "plan:watch:monthly"), through Razorpay Checkout when signed in. */
+  buy: (key: string) => Promise<BuyResult>
   unlock: (storyId: number) => boolean
   isUnlocked: (storyId: number) => boolean
   hasDeck: (id: string, cost: number) => boolean
@@ -161,43 +161,101 @@ function writeAcct(user: string, view: AcctView) {
   }
 }
 
-/* ---------------- Cashfree Checkout ---------------- */
-type CashfreeResult = { error?: { message?: string }; redirect?: boolean; paymentDetails?: { paymentMessage?: string } }
-type CashfreeInstance = { checkout: (o: { paymentSessionId: string; redirectTarget?: string }) => Promise<CashfreeResult | undefined> }
-type CashfreeFactory = (o: { mode: "sandbox" | "production" }) => CashfreeInstance
-let cfSdk: Promise<CashfreeFactory> | null = null
-function loadCashfree(): Promise<CashfreeFactory> {
-  cfSdk ??= new Promise<CashfreeFactory>((resolve, reject) => {
-    const w = window as unknown as { Cashfree?: CashfreeFactory }
-    if (w.Cashfree) return resolve(w.Cashfree)
+/* ---------------- Razorpay Checkout ---------------- */
+type RzpPaid = { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }
+type RzpOptions = {
+  key: string
+  amount: number
+  currency: string
+  name: string
+  description: string
+  image?: string
+  order_id: string
+  prefill?: { name?: string; email?: string }
+  theme?: { color: string }
+  handler: (r: RzpPaid) => void
+  modal?: { ondismiss?: () => void }
+}
+type RzpInstance = { open: () => void; on: (ev: "payment.failed", f: (r: { error?: { description?: string } }) => void) => void }
+type RzpCtor = new (o: RzpOptions) => RzpInstance
+let rzpSdk: Promise<RzpCtor> | null = null
+function loadRazorpay(): Promise<RzpCtor> {
+  rzpSdk ??= new Promise<RzpCtor>((resolve, reject) => {
+    const w = window as unknown as { Razorpay?: RzpCtor }
+    if (w.Razorpay) return resolve(w.Razorpay)
     const s = document.createElement("script")
-    s.src = "https://sdk.cashfree.com/js/v3/cashfree.js"
+    s.src = "https://checkout.razorpay.com/v1/checkout.js"
     s.async = true
-    s.onload = () => (w.Cashfree ? resolve(w.Cashfree) : reject(new Error("no cashfree")))
+    s.onload = () => (w.Razorpay ? resolve(w.Razorpay) : reject(new Error("no razorpay")))
     s.onerror = () => {
-      cfSdk = null
+      rzpSdk = null
       reject(new Error("blocked"))
     }
     document.head.appendChild(s)
   })
-  return cfSdk
+  return rzpSdk
+}
+type CheckoutOrder = { razorpayOrderId: string; keyId: string; amount: number; currency: string; description: string; prefill?: { name?: string; email?: string } }
+/** Razorpay's own pop-up (UPI, cards, netbanking, wallets). Resolves when it's paid or closed. */
+function openCheckout(Rzp: RzpCtor, o: CheckoutOrder): Promise<{ paid: RzpPaid } | { closed: true; failed?: string }> {
+  return new Promise((resolve) => {
+    let failed = ""
+    const r = new Rzp({
+      key: o.keyId,
+      amount: o.amount,
+      currency: o.currency,
+      name: "NilObs",
+      description: o.description,
+      image: `${window.location.origin}/brand/nilobs-app-icon-192.png`,
+      order_id: o.razorpayOrderId,
+      prefill: o.prefill,
+      theme: { color: "#0b6bcb" },
+      handler: (paid) => resolve({ paid }),
+      modal: { ondismiss: () => resolve({ closed: true, failed: failed || undefined }) },
+    })
+    // a failed attempt keeps the pop-up open so the buyer can try another way; remember why
+    r.on("payment.failed", (e) => (failed = e?.error?.description || "The payment didn't go through."))
+    r.open()
+  })
 }
 type Confirmed = { status: "paid" | "pending" | "failed" | "gone"; view?: unknown }
-/** Ask the server (which asks Cashfree) whether an order is paid, a few times while it's still pending. */
-async function confirmOrder(orderId: string, tries: number): Promise<Confirmed> {
+/** Ask the server (which checks with Razorpay) whether an order is paid, a few times while it's still pending. */
+async function confirmOrder(orderId: string, tries: number, paid?: RzpPaid): Promise<Confirmed> {
   for (let i = 0; i < tries; i++) {
     try {
-      const r = await walletApi<{ status: string } & Record<string, unknown>>("/api/pay/cashfree/confirm", { orderId })
+      const r = await walletApi<{ status: string } & Record<string, unknown>>("/api/pay/razorpay/confirm", { orderId, ...(paid ? { paymentId: paid.razorpay_payment_id, signature: paid.razorpay_signature } : {}) })
       if (r.status === "paid") return { status: "paid", view: r }
       if (r.status === "failed") return { status: "failed" }
     } catch (e) {
-      if ((e as ApiErr).status === 404 || (e as ApiErr).status === 409) return { status: "gone" }
+      if ((e as ApiErr).status === 404 || (e as ApiErr).status === 409 || (e as ApiErr).status === 400) return { status: "gone" }
     }
     if (i < tries - 1) await new Promise((res) => setTimeout(res, 2000))
   }
   return { status: "pending" }
 }
-const STILL_CONFIRMING = "Your payment is still being confirmed. Your credits arrive as soon as Cashfree confirms it; there's no need to pay again."
+const STILL_CONFIRMING = "Your payment is still being confirmed. Your credits arrive as soon as Razorpay confirms it; there's no need to pay again."
+// An order whose pop-up was open when the page went away (a UPI app took over, the tab was closed): checked on return
+const PENDING_KEY = "sr.pendingPay"
+const pending = {
+  set: (orderId: string) => writeRaw(PENDING_KEY, JSON.stringify({ orderId, at: Date.now() })),
+  clear: () => writeRaw(PENDING_KEY, null),
+  get: (): string => {
+    try {
+      const v = JSON.parse(localStorage.getItem(PENDING_KEY) || "null")
+      return v && typeof v.orderId === "string" && /^pay_[A-Za-z0-9]+$/.test(v.orderId) && Date.now() - v.at < 2 * 3600000 ? v.orderId : ""
+    } catch {
+      return ""
+    }
+  },
+}
+function writeRaw(k: string, v: string | null) {
+  try {
+    if (v == null) localStorage.removeItem(k)
+    else localStorage.setItem(k, v)
+  } catch {
+    /* not remembered */
+  }
+}
 
 /** What a purchase gave, for the sheet's "done" message. */
 function boughtMessage(key: string): string {
@@ -352,27 +410,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [mode, account, refresh])
 
-  // Back from Cashfree's payment page (in-app browsers can't show the pop-up): did the payment go through?
+  // Back after the page went away mid-payment (a UPI app took over, or the tab was closed): did it go through?
   useEffect(() => {
     if (mode !== "account" || !ready) return
-    const q = new URLSearchParams(window.location.search)
-    const how = q.get("checkout")
-    if (!how) return
-    const orderId = q.get("order_id") || ""
-    const u = new URL(window.location.href)
-    u.searchParams.delete("checkout")
-    u.searchParams.delete("order_id")
-    window.history.replaceState(null, "", u.pathname + u.search + u.hash)
-    if (how !== "cashfree" || !/^pay_[A-Za-z0-9]+$/.test(orderId)) return
+    const orderId = pending.get()
+    if (!orderId) return
     const user = account
     let on = true
-    confirmOrder(orderId, 6).then((r) => {
+    confirmOrder(orderId, 3).then((r) => {
       if (!on) return
+      if (r.status !== "pending") pending.clear()
       if (r.status === "paid") {
         apply(r.view, user, true)
         setSheet({ tab: "plans", done: "Payment received. Thank you!" })
-      } else if (r.status === "pending") setSheet({ tab: "plans", reason: STILL_CONFIRMING })
-      else if (r.status === "failed") setSheet({ tab: "plans", reason: "That payment didn't go through, so nothing was charged. You can try again." })
+      }
     })
     return () => {
       on = false
@@ -502,7 +553,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       claimAll: (c) => {
         if (user) send("/api/wallet/claims", c).catch(() => {})
       },
-      buy: async (key, opts) => {
+      buy: async (key) => {
         const p = product(key)
         if (!p) return { ok: false, error: "Unknown product" }
         if (!user) {
@@ -513,27 +564,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           return { ok: true, message: boughtMessage(key) }
         }
         try {
-          const o = await walletApi<Record<string, unknown>>("/api/pay/order", { product: key, currency, phone: opts?.phone || "" })
+          const o = await walletApi<Record<string, unknown>>("/api/pay/order", { product: key, currency })
           if (o.provider === "simulated") {
             apply(o, user, true)
             return { ok: true, message: boughtMessage(key) }
           }
-          if (o.provider !== "cashfree" || typeof o.sessionId !== "string" || typeof o.orderId !== "string") return { ok: false, error: "Payments aren't open yet." }
+          if (o.provider !== "razorpay" || typeof o.orderId !== "string" || typeof o.razorpayOrderId !== "string" || typeof o.keyId !== "string") return { ok: false, error: "Payments aren't open yet." }
           const orderId = o.orderId
-          const Cashfree = await loadCashfree()
-          const result = await Cashfree({ mode: o.mode === "production" ? "production" : "sandbox" }).checkout({ paymentSessionId: o.sessionId, redirectTarget: "_modal" })
-          // the pop-up couldn't open here (an in-app browser): Cashfree's page brings the buyer back to us
-          if (result?.redirect) return { redirect: true }
-          // paid, failed or closed: the server asks Cashfree which
-          const r = await confirmOrder(orderId, result?.error ? 2 : 5)
+          let Rzp: RzpCtor
+          try {
+            Rzp = await loadRazorpay()
+          } catch {
+            return { ok: false, error: "Razorpay's checkout didn't load. Check your connection or ad blocker, then try again." }
+          }
+          pending.set(orderId)
+          const result = await openCheckout(Rzp, o as unknown as CheckoutOrder)
+          // paid: the server checks Razorpay's signature and the payment itself. Closed: it asks Razorpay anyway
+          const r = "paid" in result ? await confirmOrder(orderId, 5, result.paid) : await confirmOrder(orderId, 2)
+          if (r.status !== "pending") pending.clear()
           if (r.status === "paid") {
             apply(r.view, user, true)
             return { ok: true, message: boughtMessage(key) }
           }
           // a UPI payment finished on the phone can still arrive after the pop-up closes
           setTimeout(refresh, 20000)
-          if (r.status === "failed") return { ok: false, error: "That payment didn't go through, so nothing was charged. Try again." }
-          if (result?.error) return { ok: false, cancelled: true }
+          const reason = "closed" in result ? result.failed : undefined
+          if (r.status === "failed") return { ok: false, error: reason ? `${reason} Nothing was charged.` : "That payment didn't go through, so nothing was charged. Try again." }
+          if (r.status === "gone") return { ok: false, error: "That payment couldn't be verified. If money left your account, email us and we'll sort it out." }
+          if ("closed" in result) return reason ? { ok: false, error: `${reason} Nothing was charged.` } : { ok: false, cancelled: true }
           return { ok: false, error: STILL_CONFIRMING }
         } catch (e) {
           const er = e as ApiErr

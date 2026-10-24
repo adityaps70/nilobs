@@ -16,6 +16,7 @@ import * as I from "@/components/icons"
 import { ScaledScreen } from "@/components/PhoneApp"
 import { StoryCard, StoryReader } from "@/components/StoryViews"
 import { COSTS, EARN, PASS, PLANS, TOPUPS, WELCOME, WELCOME_CREDITS, fmtPrice, useWallet, type Cycle } from "@/credits"
+import { EARNED_DAYS } from "@/economy"
 import { COST_ROWS, CurrencyToggle, CycleToggle, priceLine } from "@/components/Plans"
 import { cn } from "@/lib/utils"
 import { useNav } from "@/nav"
@@ -323,7 +324,7 @@ export function StoriesSection({ selected, setSelected }: { selected: number; se
 const FAQ: [string, string][] = [
   ["What can I do for free?", `Everything that teaches: ${CARDS.length} flashcards with spaced repetition, Spot the observation, the observation radar, the ready kit, daily missions and the question bank. You also get ${WELCOME_CREDITS} credits in your first month and ${PLANS.free.credits} every month after, so you can try every AI feature properly before you pay.`],
   ["How do credits work?", "AI features and premium content cost credits; the price is shown on every button before you tap it. A quick AI answer is 1 credit, a mock interview 8, a brief with its AI plan 20. If an AI answer fails, the credits come straight back."],
-  ["Do credits expire?", `Plan credits refill every 30 days and don't roll over, so use them. Welcome credits last ${WELCOME.days} days, credits you earn in the app last 60 days, and top-ups never expire. NilObs always spends the credits that expire soonest first.`],
+  ["Do credits expire?", `Plan credits refill every 30 days and don't roll over, so use them. Welcome credits last ${WELCOME.days} days, credits you earn in the app last ${EARNED_DAYS} days, and top-ups never expire. NilObs always spends the credits that expire soonest first.`],
   ["What happens when I run out?", "Learning carries on as normal: flashcards, the game, the radar and the ready kit are always free. AI features pause until your plan refills, you earn more, or you top up. Nothing is ever charged automatically."],
   ["I'm at sea for months. Do I need a subscription?", `No. The ${PASS.name} is a one-off: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days / 30} months, and nothing renews. Download what you need while you have signal.`],
   ["Does a plan renew by itself?", "No. You pay for a month or a year up front, and it simply ends then: you move to Free unless you buy more time. There's nothing to cancel. Your XP, level, streak and saved work stay."],
@@ -454,7 +455,7 @@ export function Pricing() {
           ))}
         </div>
         <p className="text-[12.5px] leading-relaxed text-mute">
-          {HOSTED ? "Pay through Cashfree with UPI, cards, netbanking or wallets once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
+          {HOSTED ? "Pay through Razorpay with UPI, cards, netbanking or wallets once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
           {cur === "INR" ? "Rupee prices include GST." : "Dollar prices exclude local taxes."} Ship managers can buy plans for whole crews: get in touch.
           {HOSTED && <> <a href="/terms" className="underline underline-offset-2">Terms</a> · <a href="/refunds" className="underline underline-offset-2">Refunds</a></>}
         </p>

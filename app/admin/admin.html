@@ -446,7 +446,7 @@ th button[aria-sort] { color: var(--ink); }
     var curs = Object.keys(T.revenue || {}).filter(function (k) { return T.revenue[k] > 0 })
     if (!curs.length) {
       g2.appendChild(h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Revenue per day" }), h("div", { class: "note", text: "Last 30 days" }))),
-        h("p", { class: "empty", text: "No payments yet. They show here once Cashfree is connected and someone buys." })))
+        h("p", { class: "empty", text: "No payments yet. They show here once Razorpay is connected and someone buys." })))
     }
     curs.forEach(function (cur) {
       var rv = series.map(function (p) { return { label: p.day, value: (p.revenue && p.revenue[cur]) || 0 } })

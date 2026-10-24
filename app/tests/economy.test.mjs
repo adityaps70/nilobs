@@ -25,8 +25,8 @@ test("a new wallet has welcome + free monthly credits", () => {
 test("spending uses soonest-expiring credits first and top-ups last", () => {
   let s = E.fresh(T0)
   s = E.buyTopUp(s, E.TOPUPS[0], "INR", T0) // 150, never expires
-  s = E.earn(s, 10, "Chest", T0) // expires in 60 days
-  // welcome expires day 30, free monthly expires day 30 (same), earned day 60, top-up never
+  s = E.earn(s, 10, "Chest", T0 + D / 2) // earned credits last 30 days: this lot expires half a day after the others
+  // welcome expires day 30, free monthly expires day 30 (same), earned day 30.5, top-up never
   const r = E.spend(s, 85, "Big spend", T0 + D)
   assert.equal(r.ok, true)
   const left = Object.fromEntries(r.state.buckets.map((b) => [b.kind, b.left]))
@@ -68,11 +68,11 @@ test("welcome credits expire after 30 days; free plan refills 20 without rollove
   assert.ok(much.plan.renews > T0 + 200 * D)
 })
 
-test("earned credits last 60 days", () => {
+test("earned credits last 30 days", () => {
   let s = E.fresh(T0)
-  s = E.earn(s, 3, "Chest", T0)
-  assert.equal(E.balance(E.tick(s, T0 + 59 * D), T0 + 59 * D), 20 + 3, "welcome gone, monthly refilled, earned still there")
-  assert.equal(E.balance(E.tick(s, T0 + 61 * D), T0 + 61 * D), 20)
+  s = E.earn(s, 3, "Chest", T0 + 10 * D)
+  assert.equal(E.balance(E.tick(s, T0 + 39 * D), T0 + 39 * D), 20 + 3, "welcome gone, monthly refilled, earned still there")
+  assert.equal(E.balance(E.tick(s, T0 + 41 * D), T0 + 41 * D), 20)
 })
 
 test("upgrading keeps the credits you have and adds the plan's allowance", () => {
@@ -190,16 +190,16 @@ test("top-ups never expire", () => {
   assert.equal(E.balance(E.tick(s, T0 + 900 * D), T0 + 900 * D), 1200 + 20)
 })
 
-test("sharing debriefs: once a day, four a month", () => {
+test("sharing debriefs: once a day, two a month", () => {
   let s = E.fresh(T0)
   s = E.recordShare(s, T0, "debrief 0")
-  assert.equal(E.balance(s, T0), 80 + 25)
+  assert.equal(E.balance(s, T0), 80 + 10)
   assert.equal(E.shareStatus(s, T0).ok, false, "not twice in a day")
   s = E.recordShare(s, T0, "another")
-  assert.equal(E.balance(s, T0), 105)
+  assert.equal(E.balance(s, T0), 90)
   assert.equal(E.shareStatus(s, T0 + D, "Debrief 0!").ok, false, "the same text never earns twice")
   for (let d = 1; d < 6; d++) s = E.recordShare(s, T0 + d * D, `debrief ${d}`) // 19-24 Oct, all one month
-  assert.equal(E.balance(s, T0 + 5 * D) - 80, 4 * 25, "capped at four a month")
+  assert.equal(E.balance(s, T0 + 5 * D) - 80, 2 * 10, "capped at two a month")
   assert.equal(E.shareStatus(s, T0 + 5 * D).ok, false)
   assert.equal(E.shareStatus(s, T0 + 14 * D).ok, true, "a new month resets the cap")
 })

@@ -6,7 +6,7 @@
 // - Everyone starts on Free: 60 welcome credits (expire in 30 days) plus 20 credits every 30 days.
 // - Plans refill their allowance every 30 days. Unused plan credits do not roll over.
 // - The Voyage pass is a one-off: 1,000 credits and plan perks for 180 days, no subscription.
-// - Top-ups never expire. Credits earned in the app (chest, levels, badges, streaks) last 60 days.
+// - Top-ups never expire. Credits earned in the app (chest, levels, badges, streaks) last 30 days.
 // - Spending always uses the credits that expire soonest first; top-ups go last.
 // - AI actions that fail are refunded in full. A charge is "held" while the AI works; if the page
 //   closes before it finishes, the hold is refunded automatically.
@@ -89,7 +89,7 @@ export const DAY = 86400000
 export const CYCLE_DAYS = 30
 export const YEAR_CYCLES = 12
 export const WELCOME = { credits: 60, days: 30 }
-export const EARNED_DAYS = 60
+export const EARNED_DAYS = 30
 export const LEDGER_MAX = 120
 
 /* ---------------- price list ---------------- */
@@ -169,13 +169,15 @@ export const COSTS = {
 } as const
 
 /** What the app gives back for learning. */
+// Kept small on purpose: learning stays free every day, but the AI is what credits are bought for.
+// One-off rewards add up to about 270 credits (levels 164, streaks 75, badges 30).
 export const EARN = {
-  chest: 3,
-  badge: 5,
-  share: 25,
-  sharePerMonth: 4,
-  level: { 2: 10, 3: 15, 4: 20, 5: 30, 6: 40, 7: 50, 8: 60, 9: 80, 10: 100 } as Record<number, number>,
-  streak: { 7: 10, 30: 40, 100: 100 } as Record<number, number>,
+  chest: 1,
+  badge: 2,
+  share: 10,
+  sharePerMonth: 2,
+  level: { 2: 5, 3: 7, 4: 10, 5: 12, 6: 15, 7: 20, 8: 25, 9: 30, 10: 40 } as Record<number, number>,
+  streak: { 7: 5, 30: 20, 100: 50 } as Record<number, number>,
 }
 
 /* ---------------- helpers ---------------- */
@@ -677,7 +679,7 @@ export function canBuy(state: WalletState, key: string, now: number): { ok: true
  * - Free → plan, or a higher plan: starts now, with this month's credits now and a refill every 30 days to the end of the term.
  *   Months still to come on the lower plan are kept as credits that don't expire.
  * - The same plan again: the term is extended by what was bought (a month or a year).
- * `paidWith` is a short line for the history, e.g. "₹499 via Cashfree".
+ * `paidWith` is a short line for the history, e.g. "₹499 via Razorpay".
  */
 export function grantPurchase(state: WalletState, key: string, cur: Currency, now: number, paidWith: string): { ok: true; state: WalletState } | { ok: false; why: string } {
   const p = product(key)

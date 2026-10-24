@@ -32,9 +32,9 @@ What things cost: quick AI answer 1, deep answer 4, expert answer 8 (Command), o
 
 Plans are **prepaid and never renew by themselves**: buying the same plan again adds a month or a year; moving up to a higher plan starts it now and turns the lower plan's months still to come into credits that don't expire; a lower plan can't be bought while a higher one runs.
 
-Credits are spent soonest-expiring first: plan credits refill every 30 days and don't roll over, welcome credits last 30 days, credits earned in the app last 60 days, top-ups never expire.
+Credits are spent soonest-expiring first: plan credits refill every 30 days and don't roll over, welcome credits last 30 days, credits earned in the app last 30 days, top-ups never expire.
 
-XP is rank, not money: it never goes down. Ten levels from Cadet to Vetting legend; each level-up pays credits (10 to 100), badges pay 5, the daily chest pays 3, 7/30/100-day streaks pay 10/40/100, and a shared debrief pays 25 (up to 4 a month). Streaks of 7+ and 30+ days multiply learning XP by 1.2 and 1.5. AI answers and photo checks give a little XP, capped at 30 a day, so paying for AI doesn't buy rank.
+XP is rank, not money: it never goes down. Ten levels from Cadet to Vetting legend; each level-up pays credits (5 to 40), badges pay 2, the daily chest pays 1, 7/30/100-day streaks pay 5/20/50, and a shared debrief pays 10 (up to 2 a month). Earning is kept small on purpose: learning is free every day, and the AI is what credits are bought for. Streaks of 7+ and 30+ days multiply learning XP by 1.2 and 1.5. AI answers and photo checks give a little XP, capped at 30 a day, so paying for AI doesn't buy rank.
 
 ## Roles: every rank, and the shore team
 
@@ -60,7 +60,7 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 
 - **Charging:** the app calls `POST /api/wallet/spend { item, ref }` with what it wants (e.g. `{ kind: "photo", n: 2 }`); the server prices it from the plan and balance. For AI items it opens a **ticket** (id = `ref`) that `/api/ai` and `/api/voice` require: each ticket pays for a set number of answers, on set models, with a size limit, a photo count and an expiry. Without a valid ticket the AI answers 402.
 - **Refunds:** an AI charge is kept the moment the answer starts arriving. If nothing arrives, `POST /api/wallet/refund` gives it back (and a charge left hanging is refunded after 10 minutes). Replies that must be JSON (photo checks, grades) are checked on the server before anything is sent, so a malformed or "not a ship" reply is refundable and leaks nothing.
-- **Earning:** badges, levels and streak milestones pay once per account (`POST /api/wallet/earn`, and `/api/wallet/claims` after signing in); the chest once a day; shared debriefs within the daily and monthly limits. These are still reported by the app, so the most anyone can collect this way is the one-off rewards (about 630 credits) plus the chest and 4 debriefs a month.
+- **Earning:** badges, levels and streak milestones pay once per account (`POST /api/wallet/earn`, and `/api/wallet/claims` after signing in); the chest once a day; shared debriefs within the daily and monthly limits. These are still reported by the app, so the most anyone can collect this way is the one-off rewards (about 270 credits) plus the chest and 2 debriefs a month.
 - In a local test build (no sign-in) the app keeps a practice wallet in the browser, with simulated purchases.
 
 ## Analytics dashboard (nilobs.com/admin)
@@ -73,13 +73,14 @@ For the owner only. Set the Cloudflare **secret** `ADMIN_EMAILS` to the Google a
 
 ## Payments
 
-Payments go through **Cashfree Payments** (`worker/pay.js`): UPI, cards, netbanking and wallets. Prices come only from `app/src/economy.ts`. The Worker creates a Cashfree order at that price, the app opens Cashfree's checkout pop-up, and credits are added only once Cashfree says the order is `PAID`: either the Worker asks Cashfree (Get Order, with the secret key) or Cashfree's signed notification arrives (base64 HMAC-SHA256 of timestamp + raw body). Each payment is credited once (a `pay:<id>` claim), however many times it's confirmed. Cashfree needs a mobile number on every order, so the app asks for one at checkout.
+Payments go through **Razorpay** (`worker/pay.js`): UPI, cards, netbanking and wallets. Prices come only from `app/src/economy.ts`. The Worker creates a Razorpay order at that price and the app opens Razorpay Checkout for it. Credits are added only once the money is captured: the browser hands back Razorpay's payment id and signature (HMAC-SHA256 of `order_id|payment_id` with the key secret), the Worker checks the signature and then asks Razorpay about the payment itself (right order, right amount, captured; an authorized payment is captured there). Razorpay's signed webhook (HMAC-SHA256 of the raw body with the webhook secret) covers a closed tab, and a page that went away mid-payment checks the order again when it comes back. Each payment is credited once (a `pay:<id>` claim), however many times it's confirmed.
 
-1. In the Cashfree Merchant Dashboard, switch to **Test** and open Developers → API Keys. Add the App ID and Secret Key as Cloudflare secrets `CASHFREE_APP_ID` and `CASHFREE_SECRET_KEY` (nilobs → Settings → Variables and Secrets). Nothing else to set up: each order tells Cashfree to notify `https://nilobs.com/api/pay/cashfree/webhook`.
-2. Buy something on nilobs.com with Cashfree's test card or test UPI and check the credits arrive.
-3. When your account is activated, replace the two secrets with the live keys. The Worker works out whether keys are test (sandbox) or live by itself; `CASHFREE_ENV` = `sandbox` / `production` fixes it if ever needed.
+1. In the Razorpay Dashboard, switch to **Test mode** and open Account & Settings → API Keys → Generate Key. Add the Key ID and Key Secret as Cloudflare secrets `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` (nilobs → Settings → Variables and Secrets).
+2. In Razorpay, Account & Settings → Webhooks → Add New Webhook: URL `https://nilobs.com/api/pay/razorpay/webhook`, a secret you make up, and the events `payment.captured` and `order.paid`. Add the same secret in Cloudflare as `RAZORPAY_WEBHOOK_SECRET`.
+3. Buy something on nilobs.com with Razorpay's test card or test UPI and check the credits arrive.
+4. When the account is activated, generate live keys (and a live-mode webhook) and replace the secrets. Keys starting `rzp_test_` take test payments, `rzp_live_` real ones.
 
-Prices are in rupees. Paying in dollars stays closed ("pay in rupees with an international card") until Cashfree turns on international payments for the account; then set `CASHFREE_CURRENCIES` to `INR,USD` in `wrangler.jsonc`. Until the secrets are set, buying shows "Payments in rupees open soon". `NILOBS_SIMULATED_CHECKOUT = "1"` turns on free test purchases for demos (never on the live site). Every payment is recorded in the D1 table `payments`.
+Prices are in rupees. Paying in dollars stays closed ("pay in rupees with an international card") until Razorpay turns on international payments for the account; then set `RAZORPAY_CURRENCIES` to `INR,USD` in `wrangler.jsonc`. Until the key secrets are set, buying shows "Payments in rupees open soon". `NILOBS_SIMULATED_CHECKOUT = "1"` turns on free test purchases for demos (never on the live site). Every payment is recorded in the D1 table `payments`.
 
 ## Photo check
 
@@ -113,10 +114,9 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 | `NILOBS_WALLET_PER_MINUTE` | `60` | Wallet changes per IP per minute |
 | `NILOBS_PAY_PER_MINUTE` | `8` | Checkouts started per IP per minute |
 | `NILOBS_SIMULATED_CHECKOUT` | (off) | `"1"`: purchases are free test grants (demos only) |
-| `CASHFREE_CURRENCIES` | `INR` | Currencies paid through Cashfree (`INR,USD` once international payments are on) |
-| `CASHFREE_ENV` | (worked out from the keys) | `sandbox` or `production`, to fix Cashfree's environment |
+| `RAZORPAY_CURRENCIES` | `INR` | Currencies paid through Razorpay (`INR,USD` once international payments are on) |
 
-Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `CASHFREE_APP_ID`, `CASHFREE_SECRET_KEY`, and `ADMIN_EMAILS` (who can open the analytics dashboard).
+Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and `ADMIN_EMAILS` (who can open the analytics dashboard).
 
 ## Work on it locally
 
@@ -124,7 +124,7 @@ Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `CASHFREE_AP
 npm install
 cp .dev.vars.example .dev.vars   # put your key in .dev.vars (never commit it)
 npm run dev                      # site and AI at http://localhost:8787
-npm test                         # Worker tests (fake Anthropic, Rumik and Cashfree) and economy tests
+npm test                         # Worker tests (fake Anthropic, Rumik and Razorpay) and economy tests
 ```
 
 The site is built from `app/src` (React + Tailwind) into one file, `public/index.html`:
@@ -144,7 +144,7 @@ worker/ai.js       AI endpoint: checks origin and input, rate-limits, streams Cl
 worker/voice.js    voice endpoint: Rumik text-to-speech, cached per line
 worker/guard.js    shared origin check and rate limit
 worker/wallet.js   the account's wallet: charges, tickets, refunds, earning (D1)
-worker/pay.js      Cashfree orders, payment checks and signed notifications
+worker/pay.js      Razorpay orders, payment checks and signed notifications
 worker/admin.js    the owner's analytics (/admin, /api/admin/stats), only for ADMIN_EMAILS
 app/admin/         the analytics page (built into worker/admin-page.js)
 public/sw.js       offline copy of the app for use at sea
