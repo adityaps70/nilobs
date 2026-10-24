@@ -20,6 +20,8 @@ export type AuthStatus = "off" | "loading" | "out" | "in"
 export type SyncState = "idle" | "saving" | "offline" | "error"
 interface Auth {
   status: AuthStatus
+  /** Google said yes; the account's own profile and progress are still loading (the app opens when they're in). */
+  signingIn: boolean
   user: User | null
   clientId: string | null
   sync: { state: SyncState; at: number }
@@ -31,7 +33,7 @@ interface Auth {
   prompt: (reason?: string) => void
 }
 const noop = async () => {}
-const Ctx = createContext<Auth>({ status: "off", user: null, clientId: null, sync: { state: "idle", at: 0 }, error: "", signIn: noop, signOut: noop, deleteAccount: noop, prompt: () => {} })
+const Ctx = createContext<Auth>({ status: "off", signingIn: false, user: null, clientId: null, sync: { state: "idle", at: 0 }, error: "", signIn: noop, signOut: noop, deleteAccount: noop, prompt: () => {} })
 export const useAuth = () => useContext(Ctx)
 /** "open" when the AI can be used here, "closed" when it needs a sign-in first, "loading" while checking. */
 export function useAiGate(): "open" | "closed" | "loading" {
@@ -94,6 +96,7 @@ function readLocal(meta: Meta): Synced {
   for (const k of EXTRA_KEYS) {
     const raw = ls.get(k)
     if (raw == null || raw.length > MAX_EXTRA_CHARS) continue
+    if (k === "sr.profile" && raw === "null") continue // a device that hasn't picked a role yet has no profile to share
     const h = hash(raw)
     if (meta.hashes[k] !== h) {
       meta.hashes[k] = h
@@ -134,6 +137,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<{ status: numbe
   return { status: res.status, body }
 }
 
+/** Wait for `p`, but never longer than a few seconds (a slow network shouldn't keep the app shut). */
+const settle = (p: Promise<unknown>, ms = 6000) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, ms))])
+
 /* ---------------- provider ---------------- */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>(ON_SITE ? "loading" : "off")
@@ -142,6 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sync, setSync] = useState<{ state: SyncState; at: number }>({ state: "idle", at: 0 })
   const [error, setError] = useState("")
   const [sheet, setSheet] = useState<string | null>(null)
+  const [signingIn, setSigningIn] = useState(false)
   const userRef = useRef<User | null>(null)
   const busy = useRef(false)
   const leaving = useRef(false)
@@ -238,8 +245,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!on) return
         if (me.status === 200 && me.body?.user) {
           setUser(me.body.user)
+          userRef.current = me.body.user
+          // open the app on the account's own profile and progress (a fresh device has none of its own yet)
+          await settle(pull(me.body.user).catch(() => setSync((s) => ({ ...s, state: "offline" }))))
+          if (!on) return
           setStatus("in")
-          pull(me.body.user).catch(() => setSync((s) => ({ ...s, state: "offline" })))
         } else setStatus("out")
       } catch {
         // offline: keep working with this device's copy as the account it last synced with
@@ -305,11 +315,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
       setUser(r.body.user)
-      setStatus("in")
+      userRef.current = r.body.user
       setSheet(null)
-      await pull(r.body.user)
+      setSigningIn(true)
+      await settle(pull(r.body.user).catch(() => setSync((s) => ({ ...s, state: "offline" }))))
+      setStatus("in")
     } catch {
       setError("No connection. Try again when you have signal.")
+    } finally {
+      setSigningIn(false)
     }
   }, [pull])
 
@@ -340,6 +354,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Auth>(
     () => ({
       status,
+      signingIn,
       user,
       clientId,
       sync,
@@ -349,7 +364,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       deleteAccount: () => leave("delete"),
       prompt: (reason) => setSheet(reason || "Sign in with Google to use the AI"),
     }),
-    [status, user, clientId, sync, error, signIn, leave]
+    [status, signingIn, user, clientId, sync, error, signIn, leave]
   )
   return (
     <Ctx.Provider value={value}>
@@ -444,13 +459,13 @@ function SignInSheet({ reason, onClose }: { reason: string | null; onClose: () =
   )
 }
 
-function SignInPitch() {
+export function SignInPitch() {
   return (
     <ul className="flex flex-col gap-1.5 text-[13.5px] leading-snug text-mute">
       <li>• The AI inspector, Ask NilObs, Photo check and AI plans</li>
       <li>• Credits and plans you can buy, kept safe on your account</li>
       <li>• Your XP, streak and briefs on every phone and laptop</li>
-      <li>• Nothing is posted to Google. We keep your name and email only. <a href="/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-2">Privacy</a></li>
+      <li>• Nothing is posted to Google. From Google we keep your name and email only. <a href="/privacy" target="_blank" rel="noreferrer" className="underline underline-offset-2">Privacy</a></li>
     </ul>
   )
 }

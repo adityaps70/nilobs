@@ -54,8 +54,11 @@ function usePersist<T>(key: string, init: T, valid?: (x: unknown) => boolean) {
       return init
     }
   })
+  const initial = useRef(v)
   useEffect(() => {
     try {
+      // nothing saved yet and nothing changed: don't write the default (sync would take it for a real change)
+      if (v === initial.current && localStorage.getItem(key) == null) return
       localStorage.setItem(key, JSON.stringify(v))
     } catch {
       /* storage unavailable: state just lives in memory */
@@ -419,7 +422,7 @@ function Onboard({ onDone, initialRank }: { onDone: (p: Profile) => void; initia
       <LogoMark size={56} />
       <div className="flex flex-col gap-2">
         <h2 className="display text-[30px] leading-[1.05] font-bold">Welcome aboard</h2>
-        <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} For every rank on board and the company's people ashore. No ship details and no sign-up to start.</p>
+        <p className="text-[15px] leading-snug text-mute">{BRAND.tagline} For every rank on board and the company's people ashore. Pick your role: no ship details needed.</p>
       </div>
       <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5">
         <IconTile icon={I.Coin} color="teal" size={40} />

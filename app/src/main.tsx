@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client"
 import { MotionConfig } from "motion/react"
 
 import { AppView } from "@/app/AppView"
+import { AppGate } from "@/app/AppGate"
 import { WalletProvider } from "@/credits"
 import { ProgressProvider } from "@/progress"
 import { NavProvider, useNav } from "@/nav"
@@ -47,7 +48,7 @@ function Root() {
   return (
     <>
       <div className="aurora" aria-hidden="true" />
-      {view === "app" ? <AppView /> : <Site />}
+      {view === "app" ? <AppGate><AppView /></AppGate> : <Site />}
       <PlansSheet />
     </>
   )

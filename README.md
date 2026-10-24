@@ -45,7 +45,7 @@ NilObs isn't tied to any one company. Onboarding offers every rank on board (dec
 
 ## Sign in with Google
 
-Anyone can practise without an account. The AI features (Ask NilObs, the AI inspector, Photo check, AI plans and close-out drafts) and buying need a Google sign-in. Signed in, the account's credits and plan live on the server, and XP, streak, briefs and saved screens stay in step on every device.
+On nilobs.com the app opens after a Google sign-in: "Start free" (or any link into the app) shows a sign-in screen first, then the app opens on the screen or plan the visitor picked (a new account picks its role first). The demo game and readiness check on the home page stay open to everyone. The account's credits and plan live on the server, and XP, streak, briefs and saved screens stay in step on every device. A device opens on the account's own profile and progress (`app/src/auth.tsx` loads them before `app/src/app/AppGate.tsx` lets the app open), and a device that hasn't picked a role never overwrites the account's.
 
 - **Google:** project "NilObs" in Google Cloud, consent screen published (name, email and profile only, so no Google review is needed), Web client with origin `https://nilobs.com` (and `http://localhost:8787` for `wrangler dev`). Its client ID is the `GOOGLE_CLIENT_ID` var; there is no client secret, because the page uses Google's own button and the Worker checks the ID token against Google's public keys.
 - **Cloudflare D1** database `nilobs` (binding `DB`) holds users, sessions (only a hash of each session token) and one JSON copy of each user's state with a version number. Tables: `migrations/0001_init.sql`; the Worker also creates them on first use.
@@ -61,7 +61,15 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 - **Charging:** the app calls `POST /api/wallet/spend { item, ref }` with what it wants (e.g. `{ kind: "photo", n: 2 }`); the server prices it from the plan and balance. For AI items it opens a **ticket** (id = `ref`) that `/api/ai` and `/api/voice` require: each ticket pays for a set number of answers, on set models, with a size limit, a photo count and an expiry. Without a valid ticket the AI answers 402.
 - **Refunds:** an AI charge is kept the moment the answer starts arriving. If nothing arrives, `POST /api/wallet/refund` gives it back (and a charge left hanging is refunded after 10 minutes). Replies that must be JSON (photo checks, grades) are checked on the server before anything is sent, so a malformed or "not a ship" reply is refundable and leaks nothing.
 - **Earning:** badges, levels and streak milestones pay once per account (`POST /api/wallet/earn`, and `/api/wallet/claims` after signing in); the chest once a day; shared debriefs within the daily and monthly limits. These are still reported by the app, so the most anyone can collect this way is the one-off rewards (about 630 credits) plus the chest and 4 debriefs a month.
-- Signed out (and in a local test build) the app keeps a practice wallet in the browser, with simulated purchases.
+- In a local test build (no sign-in) the app keeps a practice wallet in the browser, with simulated purchases.
+
+## Analytics dashboard (nilobs.com/admin)
+
+For the owner only. Set the Cloudflare **secret** `ADMIN_EMAILS` to the Google account(s) allowed in (comma-separated), sign in on nilobs.com with that account, then open `nilobs.com/admin`. Everyone else, signed in or not, gets the site's ordinary "not found", and so does everyone while `ADMIN_EMAILS` isn't set. It's a secret rather than a var only so the address isn't in this public repo.
+
+- **Shows:** sign-ups, active people and returning people; sign-ups, active people, credits spent and revenue per day for 30 days; credits and uses per feature; the funnel (signed up → picked a role → used the AI → paid); roles, on board vs ashore, ship types, plans and companies; the latest payments; and a searchable, sortable list of everyone (name, email, role, ship, company, sign-up and last activity, XP, streak, plan, credits left and used, AI uses, paid) with a CSV download.
+- **How:** `worker/admin.js` reads the tables the app already keeps (`users`, `user_state`, `wallets`, `payments`, `starts`) and writes nothing. It never returns chats, answers, briefs or photos. Per-feature use comes from each wallet's latest 120 entries. Days are UTC.
+- **Page:** `app/admin/admin.html` (plain HTML, no libraries), built into `worker/admin-page.js` by `node build.mjs --hosted` and served by the Worker with `no-store`, `noindex` and a strict content security policy. People's names and companies are inserted as text, never as HTML.
 
 ## Payments
 
@@ -108,7 +116,7 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 | `CASHFREE_CURRENCIES` | `INR` | Currencies paid through Cashfree (`INR,USD` once international payments are on) |
 | `CASHFREE_ENV` | (worked out from the keys) | `sandbox` or `production`, to fix Cashfree's environment |
 
-Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `CASHFREE_APP_ID`, `CASHFREE_SECRET_KEY`.
+Secrets (never in this file): `ANTHROPIC_API_KEY`, `RUMIK_API_KEY`, `CASHFREE_APP_ID`, `CASHFREE_SECRET_KEY`, and `ADMIN_EMAILS` (who can open the analytics dashboard).
 
 ## Work on it locally
 
@@ -137,6 +145,8 @@ worker/voice.js    voice endpoint: Rumik text-to-speech, cached per line
 worker/guard.js    shared origin check and rate limit
 worker/wallet.js   the account's wallet: charges, tickets, refunds, earning (D1)
 worker/pay.js      Cashfree orders, payment checks and signed notifications
+worker/admin.js    the owner's analytics (/admin, /api/admin/stats), only for ADMIN_EMAILS
+app/admin/         the analytics page (built into worker/admin-page.js)
 public/sw.js       offline copy of the app for use at sea
 app/src            app source (React, Tailwind v4, Magic UI components)
 app/src/gen        de-identified fleet data (stories, observations, flashcards, ready kit)

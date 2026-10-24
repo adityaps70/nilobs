@@ -35,6 +35,7 @@
   // Secrets (never commit them): set ANTHROPIC_API_KEY (Claude, for the AI) and RUMIK_API_KEY (Rumik, for the
   // AI inspector's voice) in the Cloudflare dashboard under Workers & Pages > nilobs > Settings > Variables and Secrets,
   // or run: npx wrangler secret put ANTHROPIC_API_KEY  /  npx wrangler secret put RUMIK_API_KEY
+  // ADMIN_EMAILS (secret): the Google account(s), comma-separated, that can open the analytics at /admin.
   // Optional voice settings: NILOBS_VOICE_SPEAKER (e.g. "speaker_2"), NILOBS_VOICE_TONE (e.g. "neutral", muga only),
   // NILOBS_VOICE_MODEL ("muga" or "mulberry"), NILOBS_VOICE_DESCRIPTION (mulberry only, e.g. "calm, firm male inspector").
   //

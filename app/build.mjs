@@ -143,4 +143,11 @@ ${FONTS}
   fs.writeFileSync(out, page)
   fs.writeFileSync(out.replace(/\.html$/, ".preview.html"), `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>${page}</body></html>`)
 }
+if (hosted) {
+  // The admin dashboard is served by the Worker itself (only to admins), never as a public file
+  const admin = fs.readFileSync(path.join(here, "admin", "admin.html"), "utf8")
+  const adminOut = path.join(here, "..", "worker", "admin-page.js")
+  fs.writeFileSync(adminOut, `// Built from app/admin/admin.html by app/build.mjs --hosted. Edit that file, not this one.\nexport default ${JSON.stringify(admin)}\n`)
+  console.log("ok admin", adminOut, (fs.statSync(adminOut).size / 1024).toFixed(0) + "KB")
+}
 console.log("ok", hosted ? "hosted" : "artifact", out, (fs.statSync(out).size / 1024).toFixed(0) + "KB")

@@ -3,6 +3,7 @@ import { handleVoice } from "./voice.js"
 import { authEnabled, getSession, handleAuth } from "./auth.js"
 import { handleWallet, meter } from "./wallet.js"
 import { handlePay } from "./pay.js"
+import { handleAdmin } from "./admin.js"
 import { limited, originAllowed, reply } from "./guard.js"
 
 const AUTH_ROUTES = ["/api/auth/config", "/api/auth/google", "/api/auth/logout", "/api/me", "/api/state"]
@@ -23,6 +24,8 @@ export default {
       url.port = ""
       return Response.redirect(url.toString(), 301)
     }
+    // The owner's analytics (only for ADMIN_EMAILS; everyone else gets "not found")
+    if (url.pathname === "/admin" || url.pathname === "/admin/" || url.pathname.startsWith("/api/admin/")) return handleAdmin(request, env)
     // (Cloudflare's static assets already serve public/privacy.html at /privacy)
     if (AUTH_ROUTES.includes(url.pathname)) return handleAuth(request, env)
     // Cashfree's payment notifications (signed by Cashfree, no session)

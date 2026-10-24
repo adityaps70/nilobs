@@ -1,0 +1,117 @@
+// The owner's analytics: only the admin account can open it; everyone else sees "not found"; the numbers add up;
+// and nothing people typed (chats, answers) ever leaves through it.
+import test from "node:test"
+import assert from "node:assert/strict"
+import { call, fakeClaude, freshEnv, json, ref, signIn, textReply } from "./helpers.mjs"
+import { featureOf } from "../worker/admin.js"
+
+const ADMIN = { ADMIN_EMAILS: " Boss@Example.com , other-admin@example.com" }
+const stats = (env, cookie) => call(env, "/api/admin/stats", { cookie })
+
+test("no admin list: the dashboard doesn't exist, even for a signed-in user", async () => {
+  const env = freshEnv()
+  const { cookie } = await signIn(env, "boss")
+  assert.equal((await stats(env, cookie)).status, 404)
+  const page = await call(env, "/admin", { cookie })
+  assert.equal(await page.text(), "site", "falls through to the static site's own not-found")
+})
+
+test("only the listed Google accounts get in; everyone else gets the same not-found", async () => {
+  const env = freshEnv(ADMIN)
+  assert.equal((await stats(env)).status, 404, "signed out")
+  assert.equal(await (await call(env, "/admin")).text(), "site", "signed out: no page")
+  const someone = await signIn(env, "someone")
+  assert.equal((await stats(env, someone.cookie)).status, 404, "a normal user")
+  assert.equal(await (await call(env, "/admin", { cookie: someone.cookie })).text(), "site")
+  const boss = await signIn(env, "boss") // boss@example.com, matched without caring about case or spaces
+  const page = await call(env, "/admin", { cookie: boss.cookie })
+  assert.equal(page.status, 200)
+  assert.match(page.headers.get("content-type"), /text\/html/)
+  assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/)
+  assert.equal(page.headers.get("x-robots-tag"), "noindex, nofollow")
+  assert.equal(page.headers.get("cache-control"), "no-store")
+  assert.match(await page.text(), /NilObs Analytics/)
+  const r = await stats(env, boss.cookie)
+  assert.equal(r.status, 200)
+  assert.equal(r.headers.get("cache-control"), "no-store")
+  assert.equal((await r.json()).admin.email, "boss@example.com")
+  assert.equal((await call(env, "/api/admin/stats", { method: "POST", cookie: boss.cookie, body: {} })).status, 404, "read-only")
+  assert.equal((await call(env, "/api/admin/nope", { cookie: boss.cookie })).status, 404)
+})
+
+test("the numbers: people, roles, AI use, plans and payments add up; chats never leave", async () => {
+  const env = freshEnv({ ...ADMIN, NILOBS_SIMULATED_CHECKOUT: "1" })
+  const boss = await signIn(env, "boss")
+  const cook = await signIn(env, "cook")
+  const dpa = await signIn(env, "dpa")
+  await signIn(env, "lurker") // signed up, never picked a role
+  const today = new Date().toISOString().slice(0, 10)
+  const put = (cookie, extras, progress) => call(env, "/api/state", { method: "PUT", cookie, body: { base: 0, data: { progress, extras } } })
+  assert.equal((await put(cook.cookie, { "sr.profile": { v: { rank: "Cook", ship: "Product", company: "Example Tankers" }, t: 1 }, "sr.ask": { v: { msgs: [{ role: "user", text: "TOP-SECRET-QUESTION" }] }, t: 1 } }, { xp: 40, days: { [today]: 40 }, streak: { n: 2, best: 3 }, stats: { cards: 12 } })).status, 200)
+  assert.equal((await put(dpa.cookie, { "sr.profile": { v: { rank: "DPA", ship: "Crude", company: "example tankers" }, t: 1 } }, { xp: 5, days: {} })).status, 200)
+  assert.equal((await put(boss.cookie, { "sr.profile": { v: { rank: "Other", roleName: "Terminal rep", ship: "Gas" }, t: 1 } }, null)).status, 200)
+
+  // the cook asks NilObs twice (one answer arrives, one fails and is refunded) and buys a plan
+  const spend = (item, r) => call(env, "/api/wallet/spend", { method: "POST", cookie: cook.cookie, body: { item, ref: r } }).then(json)
+  assert.equal((await spend({ kind: "askDeep" }, "t-ok-0001")).status, 200)
+  fakeClaude.next = () => textReply("Fine")
+  await (await call(env, "/api/ai", { method: "POST", cookie: cook.cookie, body: { messages: [{ role: "user", content: "hi" }], ticket: "t-ok-0001", tier: "default" } })).text()
+  assert.equal((await spend({ kind: "askQuick" }, "t-bad-0001")).status, 200)
+  assert.equal((await call(env, "/api/wallet/refund", { method: "POST", cookie: cook.cookie, body: { ticket: "t-bad-0001" } })).status, 200)
+  assert.equal((await call(env, "/api/pay/order", { method: "POST", cookie: cook.cookie, body: { product: "plan:watch:monthly", currency: "INR" } }).then(json)).provider, "simulated")
+  // the DPA checks a photo
+  assert.equal((await call(env, "/api/wallet/spend", { method: "POST", cookie: dpa.cookie, body: { item: { kind: "photo", n: 1 }, ref: ref() } })).status, 200)
+
+  const raw = await (await stats(env, boss.cookie)).text()
+  assert.ok(!raw.includes("TOP-SECRET-QUESTION"), "chats never leave through the dashboard")
+  const d = JSON.parse(raw)
+  assert.equal(d.totals.users, 4)
+  assert.equal(d.totals.new7, 4)
+  assert.equal(d.totals.active1, 4)
+  assert.deepEqual(d.funnel.map((f) => f.n), [4, 3, 2, 1], "signed up → role → AI → paid")
+  assert.deepEqual(Object.fromEntries(d.roles.map((r) => [r.name, r.n])), { Cook: 1, "Designated Person Ashore": 1, "Terminal rep": 1 })
+  assert.deepEqual(Object.fromEntries(d.groups.map((r) => [r.name, r.n])), { "On board": 1, Ashore: 1, Other: 1 })
+  assert.deepEqual(d.companies, [{ name: "Example Tankers", n: 2 }], "companies grouped without caring about case")
+  assert.deepEqual(Object.fromEntries(d.plans.map((r) => [r.name, r.n])), { free: 3, watch: 1 })
+  const f = Object.fromEntries(d.features.map((x) => [x.name, x]))
+  assert.equal(f["Ask NilObs"].uses, 1, "the refunded ask doesn't count")
+  assert.equal(f["Ask NilObs"].credits, 4)
+  assert.equal(f["Ask NilObs"].users, 1)
+  assert.equal(f["Photo check"].credits, 3)
+  assert.equal(d.totals.creditsSpent30, 7)
+  assert.equal(d.totals.paidCount, 1)
+  assert.equal(d.totals.payers, 1)
+  assert.equal(d.totals.revenue.INR, 499)
+  assert.equal(d.series.length, 30)
+  assert.equal(d.series.at(-1).signups, 4)
+  assert.equal(d.series.at(-1).credits, 7)
+  assert.equal(d.series.at(-1).revenue.INR, 499)
+  assert.ok(d.series.at(-1).active >= 2, "people who learned or spent today")
+  const cookRow = d.users.find((u) => u.email === "cook@example.com")
+  assert.equal(cookRow.role, "Cook")
+  assert.equal(cookRow.side, "board")
+  assert.equal(cookRow.xp, 40)
+  assert.equal(cookRow.streak, 2)
+  assert.equal(cookRow.cards, 12)
+  assert.equal(cookRow.plan, "watch")
+  assert.equal(cookRow.aiUses, 1)
+  assert.equal(cookRow.spent, 4)
+  assert.deepEqual(cookRow.paid, { INR: 499 })
+  assert.equal(d.users.find((u) => u.email === "lurker@example.com").role, "")
+  assert.equal(d.recentPayments[0].who, "cook@example.com")
+  assert.ok(!("google_sub" in cookRow) && !("picture" in cookRow), "no more than the dashboard shows")
+})
+
+test("deleted accounts are counted, and features are named from wallet labels", async () => {
+  const env = freshEnv(ADMIN)
+  const boss = await signIn(env, "boss")
+  const gone = await signIn(env, "gone")
+  assert.equal((await call(env, "/api/me", { method: "DELETE", cookie: gone.cookie })).status, 200)
+  const d = await (await stats(env, boss.cookie)).json()
+  assert.equal(d.totals.users, 1)
+  assert.equal(d.totals.deleted, 1)
+  assert.equal(featureOf("Refund: AI inspector (voice) (no answer)"), "AI inspector (voice)")
+  assert.equal(featureOf("Photo check · 2 photos"), "Photo check")
+  assert.equal(featureOf("Role pack: cards and checklist"), "Role pack")
+  assert.equal(featureOf("Something new"), "Other")
+})
