@@ -119,7 +119,16 @@ export async function pulseView(db, now = Date.now()) {
 export async function handlePulse(request, env, user, ctx, fetchImpl = fetch) {
   await ensureLiveSchema(env.DB)
   if (!user) return json(401, { error: "Sign in first" })
-  if (request.method === "GET") return json(200, await pulseView(env.DB))
+  if (request.method === "GET") {
+    // debriefs the AI couldn't check yet (it may be unreachable from scheduled jobs) are checked after a visit
+    const waiting = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM debriefs WHERE status = 'pending'").first())?.n) || 0
+    if (waiting && ctx?.waitUntil) {
+      await env.DB.prepare("INSERT OR IGNORE INTO app_keys (k, v) VALUES ('pulse_ai', '0')").run()
+      const lock = await env.DB.prepare("UPDATE app_keys SET v = ? WHERE k = 'pulse_ai' AND CAST(v AS INTEGER) < ?").bind(String(Date.now()), Date.now() - 3 * 60000).run()
+      if (lock?.meta?.changes) ctx.waitUntil(runPulse(env, fetchImpl).catch(() => {}))
+    }
+    return json(200, await pulseView(env.DB))
+  }
   if (request.method !== "POST") return json(405, { error: "Use GET or POST" })
   let body = {}
   try {

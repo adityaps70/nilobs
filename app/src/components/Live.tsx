@@ -110,13 +110,22 @@ async function refreshFeed(force = false) {
   if (feed.loading || (!force && Date.now() - feed.at < 4 * 60000)) return
   feed = { ...feed, loading: true }
   emit()
-  const r = await api<{ items: FeedItem[]; updatedAt: number }>("/api/feed?limit=40")
+  const r = await api<{ items: FeedItem[]; updatedAt: number; pending?: number }>(`/api/feed?limit=40&r=${Math.floor(Date.now() / 30000)}`)
   if (r.ok && r.data && Array.isArray(r.data.items)) {
     feed = { items: r.data.items, at: Date.now(), updatedAt: r.data.updatedAt || 0, loading: false, failed: false }
     ls.set(FEED_CACHE, { items: feed.items, at: feed.at, updatedAt: feed.updatedAt })
+    // new items are being read by the AI right now: look again shortly
+    if (r.data.pending && !pendingRetry) {
+      pendingRetry = true
+      setTimeout(() => {
+        pendingRetry = false
+        refreshFeed(true)
+      }, 35000)
+    }
   } else feed = { ...feed, loading: false, failed: true }
   emit()
 }
+let pendingRetry = false
 export function useFeed() {
   const [, tick] = useState(0)
   useEffect(() => {

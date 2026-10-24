@@ -60,7 +60,7 @@ export default {
       return isAi ? handleAi(request, env, fetch, m, ctx) : handleVoice(request, env, fetch, globalThis.caches?.default, m)
     }
     // The live features: the industry feed (public), reminders, the inspection pulse and weekly leagues
-    if (url.pathname === "/api/feed") return handleFeed(request, env)
+    if (url.pathname === "/api/feed") return handleFeed(request, env, ctx)
     if (url.pathname.startsWith("/api/push/") || url.pathname === "/api/pulse" || url.pathname === "/api/league") {
       if (!authEnabled(env)) return reply(404, { error: "Accounts aren't set up on this server" })
       if (request.method !== "GET" && !originAllowed(request, env)) return reply(403, { error: "Origin not allowed" })

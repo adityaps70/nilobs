@@ -90,9 +90,16 @@ const clip = (s, n) => plain(s, n)
 /* ---------------- the job ---------------- */
 /** Read every source, store what's new, have the AI read up to AI_PER_RUN new items, tidy old ones. */
 export async function runFeed(env, now = Date.now(), fetchImpl = fetch) {
+  const report = await fetchSources(env, now, fetchImpl)
+  Object.assign(report, await readNew(env, now, fetchImpl))
+  return report
+}
+
+/** Read every source and store what's new (no AI). */
+export async function fetchSources(env, now = Date.now(), fetchImpl = fetch) {
   await ensureLiveSchema(env.DB)
   const db = env.DB
-  const report = { sources: {}, added: 0, read: 0, live: 0 }
+  const report = { sources: {}, added: 0 }
   const health = []
   // Few queries per run (Cloudflare limits them): new items go in as multi-row inserts, updates as one batch
   for (const src of SOURCES) {
@@ -123,7 +130,17 @@ export async function runFeed(env, now = Date.now(), fetchImpl = fetch) {
   if (health.length)
     await db.prepare(`INSERT INTO feed_sources (id, last_run, last_ok, last_error, items) VALUES ${health.map(() => "(?, ?, ?, ?, ?)").join(", ")} ON CONFLICT (id) DO UPDATE SET last_run = excluded.last_run, last_ok = COALESCE(excluded.last_ok, feed_sources.last_ok), last_error = excluded.last_error, items = CASE WHEN excluded.last_ok IS NULL THEN feed_sources.items ELSE excluded.items END`)
       .bind(...health.flat()).run()
-  // the AI reads the newest unread items first
+  return report
+}
+
+/**
+ * The AI reads the newest unread items. Claude's API turns away some of the data centres scheduled jobs run in,
+ * so this also runs in the background after an ordinary visit (readNewIfDue), which is served near the reader.
+ */
+export async function readNew(env, now = Date.now(), fetchImpl = fetch) {
+  await ensureLiveSchema(env.DB)
+  const db = env.DB
+  const report = { read: 0, live: 0 }
   const unread = (await db.prepare(`SELECT id, source, title, excerpt FROM feed_items WHERE status = 'new' ORDER BY published_at DESC LIMIT ${AI_PER_RUN}`).all()).results || []
   const updates = []
   for (let i = 0; i < unread.length; i += AI_BATCH) {
@@ -180,12 +197,24 @@ export async function latestFeed(db, { limit = 30, before = 0 } = {}) {
   return (rows || []).map(feedItem)
 }
 
-export async function handleFeed(request, env) {
+/** Unread items waiting? Let one visit (at a time, every few minutes) have the AI read them in the background. */
+export async function readNewIfDue(env, ctx, now = Date.now(), fetchImpl = fetch) {
+  const waiting = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM feed_items WHERE status = 'new'").first())?.n) || 0
+  if (!waiting || !env.ANTHROPIC_API_KEY || !ctx?.waitUntil) return waiting
+  await env.DB.prepare("INSERT OR IGNORE INTO app_keys (k, v) VALUES ('feed_ai', '0')").run()
+  const lock = await env.DB.prepare("UPDATE app_keys SET v = ? WHERE k = 'feed_ai' AND CAST(v AS INTEGER) < ?").bind(String(now), now - 3 * 60000).run()
+  if (lock?.meta?.changes) ctx.waitUntil(readNew(env, now, fetchImpl).catch((e) => console.error("feed read", e?.message || e)))
+  return waiting
+}
+
+export async function handleFeed(request, env, ctx) {
   if (request.method !== "GET") return json(405, { error: "Use GET" })
-  if (!env.DB) return json(200, { items: [], updatedAt: 0 })
+  if (!env.DB) return json(200, { items: [], updatedAt: 0, pending: 0 })
   const url = new URL(request.url)
+  await ensureLiveSchema(env.DB)
+  const pending = await readNewIfDue(env, ctx).catch(() => 0)
   const items = await latestFeed(env.DB, { limit: url.searchParams.get("limit"), before: url.searchParams.get("before") })
   const last = await env.DB.prepare("SELECT MAX(last_ok) AS t FROM feed_sources").first().catch(() => null)
-  // a short shared cache: everyone sees the same feed, and it changes every few hours
-  return json(200, { items, updatedAt: Number(last?.t) || 0 }, { "cache-control": "public, max-age=120" })
+  // a short cache: everyone sees the same feed, and it changes every few hours
+  return json(200, { items, updatedAt: Number(last?.t) || 0, pending }, { "cache-control": "public, max-age=60" })
 }

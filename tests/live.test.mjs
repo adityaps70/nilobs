@@ -266,3 +266,31 @@ test("leagues: this week's XP by role group, anonymous unless you choose a name,
   assert.equal(cleanName("http://x"), null)
   assert.equal((await call(env, "/api/league")).status, 401)
 })
+
+test("when the AI can't be reached from the scheduled job, the next visit has it read the new items", async () => {
+  const env = fresh()
+  const now = Date.now()
+  const { fetchImpl } = feedWorld(now)
+  const blocked = async (url, init) => (String(url).startsWith("https://api.anthropic.com/") ? new Response("Request not allowed", { status: 403 }) : fetchImpl(url, init))
+  const r = await runFeed(env, now, blocked)
+  assert.ok(r.added > 0)
+  assert.equal(r.read, 0)
+  // a visit: served at once with what's live (nothing yet), and the AI reads in the background
+  const waits = []
+  const { handleFeed } = await import("../worker/feed.js")
+  fakeClaude.next = (body) => {
+    const n = (body.messages[0].content.match(/^Item \d+/gm) || []).length
+    return claudeText(JSON.stringify(Array.from({ length: n }, (_, i) => ({ n: i + 1, relevance: 80, kind: "alert", takeaway: "Takeaway.", check: "Check.", roles: ["deck"], topics: [] }))))
+  }
+  const res = await handleFeed(new Request("https://nilobs.com/api/feed"), env, { waitUntil: (p) => waits.push(p) })
+  const first = await res.json()
+  assert.ok(first.pending > 0)
+  assert.equal(waits.length, 1)
+  await Promise.all(waits)
+  // a second visit straight after doesn't start another read (one at a time)
+  const waits2 = []
+  const second = await (await handleFeed(new Request("https://nilobs.com/api/feed"), env, { waitUntil: (p) => waits2.push(p) })).json()
+  assert.equal(waits2.length, 0)
+  assert.equal(second.pending, 0)
+  assert.ok(second.items.length >= 2)
+})
