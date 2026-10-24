@@ -15,14 +15,17 @@ import { AiSection, HabitSection, RadarSection, SpotSection } from "@/sections/f
 import { PlansSheet } from "@/components/Plans"
 import { HOSTED } from "@/ai"
 import { AuthProvider } from "@/auth"
+import { LiveTeaser } from "@/components/Live"
 
 function Site() {
   const { selected, setSelected, jump } = useStorySelection()
+  const { openApp } = useNav()
   return (
     <>
       <SiteNav />
       <main>
         <LandingHero />
+        {HOSTED && <LiveTeaser onOpen={() => openApp({ screen: "live" })} />}
         <SpotSection />
         <AiSection />
         <ConfidenceCheck />

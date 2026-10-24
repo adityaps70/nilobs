@@ -20,6 +20,7 @@ import type { Profile } from "@/components/PhoneApp"
 import type { AppScreen } from "@/nav"
 import { STORIES } from "@/stories"
 import { AiChip, ExplainObs, RolePack } from "@/components/AiFeatures"
+import { ReminderCard } from "@/components/Live"
 
 type Ico = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>
 const ICON = I as unknown as Record<string, Ico>
@@ -954,6 +955,7 @@ export function MeScreen({ go, profile, setProfile, night, setNight }: { go: (s:
       <TopBar title="Your profile" onBack={() => go("today")} />
       <Scroll className="gap-4">
         <AccountCard />
+        <ReminderCard />
         <section className="glass-deep flex flex-col gap-4 rounded-[24px] p-5">
           <div className="flex items-center gap-4">
             <LevelRing size={78} stroke={6} dark />

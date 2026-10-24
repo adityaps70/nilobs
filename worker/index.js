@@ -4,6 +4,10 @@ import { authEnabled, getSession, handleAuth } from "./auth.js"
 import { handleWallet, meter } from "./wallet.js"
 import { handlePay } from "./pay.js"
 import { handleAdmin } from "./admin.js"
+import { handleFeed, runFeed } from "./feed.js"
+import { handlePush, runPush } from "./push.js"
+import { handlePulse, runPulse } from "./pulse.js"
+import { handleLeague } from "./league.js"
 import { limited, originAllowed, reply } from "./guard.js"
 
 const AUTH_ROUTES = ["/api/auth/config", "/api/auth/google", "/api/auth/logout", "/api/me", "/api/state"]
@@ -54,10 +58,36 @@ export default {
       const m = meter(env, s.user.id, isAi ? "ai" : "voice")
       return isAi ? handleAi(request, env, fetch, m, ctx) : handleVoice(request, env, fetch, globalThis.caches?.default, m)
     }
+    // The live features: the industry feed (public), reminders, the inspection pulse and weekly leagues
+    if (url.pathname === "/api/feed") return handleFeed(request, env)
+    if (url.pathname.startsWith("/api/push/") || url.pathname === "/api/pulse" || url.pathname === "/api/league") {
+      if (!authEnabled(env)) return reply(404, { error: "Accounts aren't set up on this server" })
+      if (request.method !== "GET" && !originAllowed(request, env)) return reply(403, { error: "Origin not allowed" })
+      if (await limited(request, env, { name: "live", binding: null, perMinute: Number(env.NILOBS_LIVE_PER_MINUTE || 60) })) return reply(429, { error: "Too many requests. Try again in a minute." })
+      const s = url.pathname === "/api/push/key" ? null : await getSession(request, env)
+      if (url.pathname.startsWith("/api/push/")) return handlePush(request, env, s?.user || null)
+      if (url.pathname === "/api/pulse") return handlePulse(request, env, s?.user || null, ctx)
+      return handleLeague(request, env, s?.user || null)
+    }
     if (url.pathname === "/api/health")
       return new Response(JSON.stringify({ ok: true, ai: Boolean(env.ANTHROPIC_API_KEY), voice: Boolean(env.RUMIK_API_KEY), signin: authEnabled(env) }), {
         headers: { "content-type": "application/json", "cache-control": "no-store" },
       })
     return env.ASSETS.fetch(request)
+  },
+
+  // Cron (wrangler.jsonc → triggers): every 15 minutes send the reminders that are due; every 3 hours, on the
+  // hour, also read the industry sources. Debriefs the AI couldn't check earlier are retried each time.
+  async scheduled(event, env, ctx) {
+    if (!env.DB) return
+    const now = event?.scheduledTime || Date.now()
+    const d = new Date(now)
+    const feedTime = d.getUTCMinutes() < 15 && d.getUTCHours() % 3 === 0
+    const jobs = [
+      runPush(env, now, fetch, feedTime ? 15 : 30).catch((e) => console.error("push run", e?.message || e)),
+      runPulse(env).catch((e) => console.error("pulse run", e?.message || e)),
+    ]
+    if (feedTime || event?.cron === "feed") jobs.push(runFeed(env, now).then((r) => console.log("feed run", JSON.stringify(r))).catch((e) => console.error("feed run", e?.message || e)))
+    ctx.waitUntil(Promise.all(jobs))
   },
 }

@@ -24,7 +24,8 @@ import { FLEET_STATS, KIT_TOTAL, OBS, type DeckId } from "@/fleet"
 import { CHAPTERS, OCIMF_URL, SECTIONS, chapterOf, libForRank, officialFor, sectionOf } from "@/library"
 import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components/topicIcons"
 import { RolePicker, RoleSelect } from "@/components/RolePicker"
-import { AccountChip } from "@/auth"
+import { AccountChip, useAuth } from "@/auth"
+import { DailyDrill, DrillCard, LeagueCard, LeagueScreen, LiveCard, LiveScreen, PulseCard, PulseScreen, shareToPulse, type PulseShare } from "@/components/Live"
 import { cleanRoleName, hasPreparedQuestions, isShore, roleOf, setCompany, setCurrentProfile, setCustomRole } from "@/roles"
 import { Chip, Label, Scroll, Section, TopBar } from "@/components/ui"
 import { BRAND, Logo, LogoMark } from "@/components/Brand"
@@ -235,10 +236,14 @@ export function PhoneApp({
     { k: "today", label: "Today", Icon: I.Home, target: "today" },
     { k: "train", label: "Train", Icon: I.Layers, target: "train" },
     { k: "ask", label: "Ask AI", Icon: I.Sparkle, target: "ask" },
+    { k: "live", label: "Live", Icon: I.Antenna, target: "live" },
     { k: "radar", label: "Radar", Icon: I.Radar, target: "radar" },
-    { k: "stories", label: "Stories", Icon: I.Newspaper, target: "stories" },
   ]
   const secondary: NavItem[] = [
+    { k: "daily", label: "Today's drill", Icon: I.Target, target: "daily" },
+    { k: "pulse", label: "Inspection pulse", Icon: I.Users, target: "pulse" },
+    { k: "league", label: "Weekly league", Icon: I.Trophy, target: "league" },
+    { k: "stories", label: "Stories", Icon: I.Newspaper, target: "stories" },
     { k: "practice", label: "AI inspector", Icon: I.Mic, target: "practice" },
     { k: "photo", label: "Photo check", Icon: I.Camera, target: "photo" },
     { k: "bank", label: "Questions", Icon: I.Book, target: "bank" },
@@ -310,6 +315,10 @@ export function PhoneApp({
               {screen === "photo" && <PhotoCheck rank={rank} ship={profile?.ship ?? "Product"} onAsk={(q) => { setAskSeed({ q, auto: false }); go("ask") }} />}
               {screen === "spot" && <SpotScreen go={go} />}
               {screen === "radar" && <RadarScreen rank={rank} go={go} />}
+              {screen === "live" && <LiveScreen rank={rank} openTopic={(t) => { setBankTopic(t); setBankMode("real"); go("bank") }} openAsk={(q) => { setAskSeed({ q, auto: true }); go("ask") }} />}
+              {screen === "daily" && <DailyDrill rank={rank} go={go} brief={brief ?? null} briefDate={briefDate} openTopic={(t) => { setBankTopic(t); setBankMode("real"); go("bank") }} />}
+              {screen === "pulse" && <PulseScreen go={go} openTopic={(t) => { setBankTopic(t); setBankMode("real"); go("bank") }} />}
+              {screen === "league" && <LeagueScreen />}
               {screen === "kit" && <KitScreen go={go} />}
               {screen === "me" && <MeScreen go={go} profile={profile} setProfile={setProfile} night={night} setNight={setNight} />}
               {screen === "share" && <Share night={night} />}
@@ -557,9 +566,18 @@ function Today(p: {
 
       <WalletNudge onOpen={() => p.go("wallet")} />
 
+      <DrillCard rank={p.rank} go={p.go} brief={p.brief ?? null} briefDate={p.briefDate} />
+
       <MissionsCard go={p.go} />
 
+      <LiveCard rank={p.rank} go={p.go} />
+
       <AskCard rank={p.rank} onAsk={p.openAsk} />
+
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        <LeagueCard go={p.go} />
+        <PulseCard go={p.go} />
+      </div>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {actions.map((a, i) => (
@@ -1302,6 +1320,8 @@ function debriefProblem(text: string, parsed: ReturnType<typeof structureDebrief
 }
 function Share({ night }: { night: boolean }) {
   const wallet = useWallet()
+  const auth = useAuth()
+  const [pulse, setPulse] = useState<PulseShare | null>(null)
   const [raw, setRaw] = useState("")
   const [stage, setStage] = useState<"edit" | "working" | "done">("edit")
   const [err, setErr] = useState("")
@@ -1315,8 +1335,12 @@ function Share({ night }: { night: boolean }) {
     if (problem) return setErr(problem)
     setErr("")
     setStage("working")
-    setTimeout(() => {
+    setPulse(null)
+    // signed in on nilobs.com: the AI checks it, takes the names out and publishes it to the Inspection pulse
+    const published = auth.status === "in" ? shareToPulse(text) : Promise.resolve(null)
+    setTimeout(async () => {
       const ok = wallet.recordShare(text)
+      setPulse(await published)
       setEarned(ok)
       setStage("done")
       if (ok) setTimeout(() => burst(doneRef.current, night ? { colors: NIGHT_COLORS } : {}), 900)
@@ -1331,7 +1355,7 @@ function Share({ night }: { night: boolean }) {
           <>
             <div className="flex gap-2.5 rounded-2xl bg-sea-soft px-4 py-3 text-[13px] leading-snug text-sea">
               <I.Shield size={18} className="shrink-0" />
-              <span>Anonymous by design. Your name, the ship and the inspector's name are removed before a moderator sees it.</span>
+              <span>Anonymous by design. Names of ships, people, companies and ports are taken out before it appears in the Inspection pulse for other crews.</span>
             </div>
             <p className="text-[13.5px] leading-snug text-mute">
               Paste it the way you'd post it in a group. The next officer facing the same inspection gets the benefit.{" "}
@@ -1376,8 +1400,8 @@ function Share({ night }: { night: boolean }) {
             <BlurFade delay={0.95}>
               <div ref={doneRef} className="flex items-center justify-between rounded-2xl border border-line bg-surface px-3.5 py-3">
                 <span className="flex flex-col">
-                  <span className="text-[14px] font-bold">Sent for review</span>
-                  <span className="text-[12px] text-mute">{earned ? "A moderator checks it, usually within a day" : "Thank you. It still helps the next crew"}</span>
+                  <span className="text-[14px] font-bold">{pulse?.status === "live" ? "Published in the pulse" : pulse?.status === "rejected" ? "Not published" : "Sent for review"}</span>
+                  <span className="text-[12px] text-mute">{pulse ? pulse.message : earned ? "It's checked before anyone sees it" : "Thank you. It still helps the next crew"}</span>
                 </span>
                 {earned ? <span className="tnum display text-[22px] font-bold text-sea">+<NumberTicker value={EARN.share} delay={1} className="text-sea" /></span> : <I.Check size={22} className="text-sea" />}
               </div>

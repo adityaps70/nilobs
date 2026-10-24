@@ -58,6 +58,7 @@ export const XP = {
   interviewPerPoint: 3, // AI inspector: score × 3 (min 2)
   mission: 20, // each daily mission
   chest: 50, // all three missions done
+  drill: 30, // today's drill finished (once a day)
 } as const
 /** XP from Ask, Explain and Photo check is capped per day so paying for AI doesn't buy rank. */
 export const AI_XP_CAP = 30
@@ -114,6 +115,7 @@ interface PState {
   levelPaid: number
   milestones: number[]
   freezeMonth: string
+  drill: { day: string; done: number } // today's drill: the day it was last finished, and how many days in all
 }
 const KEY = "sr.progress"
 const fresh = (): PState => ({
@@ -134,6 +136,7 @@ const fresh = (): PState => ({
   levelPaid: 1,
   milestones: [],
   freezeMonth: "",
+  drill: { day: "", done: 0 },
 })
 const n0 = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0)
 const pair = (x: unknown): Pair => (Array.isArray(x) && x.length === 2 ? [Math.max(0, n0(x[0])), Math.max(0, n0(x[1]))] : [0, 0])
@@ -208,6 +211,7 @@ function parseState(input: unknown): PState {
       levelPaid: typeof p.levelPaid === "number" ? p.levelPaid : levelOf(xp).n,
       milestones: arr<number>(p.milestones),
       freezeMonth: typeof p.freezeMonth === "string" ? p.freezeMonth : "",
+      drill: { day: typeof p.drill?.day === "string" ? p.drill.day : "", done: n0(p.drill?.done) },
     }
   } catch {
     return base
@@ -278,6 +282,9 @@ interface Progress extends PState {
   recordInterview: (r: Omit<InterviewRec, "at">) => void
   buyFreeze: () => boolean
   readiness: (rank: string) => Readiness[]
+  /** Today's drill is finished: XP once a day. Returns the XP given (0 if already done today). */
+  finishDrill: (el?: Element | null) => number
+  drillDoneToday: boolean
 }
 const Ctx = createContext<Progress | null>(null)
 
@@ -606,6 +613,15 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         return true
       },
       readiness: (rank) => readinessFor(ref.current, rank),
+      drillDoneToday: s.drill.day === todayKey(),
+      finishDrill: (el) => {
+        const tk2 = todayKey()
+        if (ref.current.drill.day === tk2) return 0
+        const got = act(XP.drill, (p) => ({ ...p, drill: { day: tk2, done: p.drill.done + 1 } }))
+        pop(el, true)
+        celebrate({ kind: "mission", title: `Today's drill done: +${got} XP`, sub: "A new one is ready tomorrow", icon: "Target" })
+        return got
+      },
     }
   }, [s, act, badge, celebrate, freezeCap])
 

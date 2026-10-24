@@ -63,6 +63,15 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 - **Earning:** badges, levels and streak milestones pay once per account (`POST /api/wallet/earn`, and `/api/wallet/claims` after signing in); the chest once a day; shared debriefs within the daily and monthly limits. These are still reported by the app, so the most anyone can collect this way is the one-off rewards (about 270 credits) plus the chest and 2 debriefs a month.
 - In a local test build (no sign-in) the app keeps a practice wallet in the browser, with simulated purchases.
 
+## Live features (worth opening every day)
+
+- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): every 3 hours the Worker reads public sources (UK MAIB accident reports and MCA guidance through GOV.UK's search API, plus the SAFETY4SEA, Splash247, gCaptain and Marine Insight feeds), keeps what's new, and has Claude (the quick model) judge each item's relevance to tanker crews and write a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
+- **Today's drill**: 3 flashcards (your brief's focus topics if the inspection is within 21 days, otherwise your weakest), 2 Spot rounds and one live update; +30 XP once a day (`progress.drill`).
+- **Daily reminders** (`worker/push.js`, `public/sw.js`): opt-in web push at the hour each person picks, in their own time zone, once a day. The Worker makes its own VAPID signing key on first use (kept in D1), sends empty pushes, and the service worker asks `/api/push/message` for a personal line (inspection countdown, streak, new updates). Only Google, Mozilla, Apple and Microsoft push addresses are accepted. On iPhone it works once NilObs is added to the Home Screen.
+- **Inspection pulse** (`worker/pulse.js`): debriefs shared from the app are checked and de-identified by Claude (names of ships, people, companies, oil majors, terminals and ports removed; a last regex pass catches ship prefixes, IMO numbers and emails). Others see only that version, plus trending topics for the last 14 days. Three a day per person; the owner can hide any of them on the dashboard.
+- **Weekly leagues** (`worker/league.js`): this week's XP (Monday to Sunday, UTC) by role group, from synced progress, at most 500 XP a day counted. Anonymous ("Second Officer 4821") unless someone chooses a display name.
+- **Schedule**: `wrangler.jsonc` → `triggers.crons` runs every 15 minutes (reminders due, debriefs the AI couldn't check yet) and reads the feed every 3 hours. Database writes are batched to stay inside Cloudflare's per-run limits.
+
 ## Analytics dashboard (nilobs.com/admin)
 
 For the owner only. Set the Cloudflare **secret** `ADMIN_EMAILS` to the Google account(s) allowed in (comma-separated), sign in on nilobs.com with that account, then open `nilobs.com/admin`. Everyone else, signed in or not, gets the site's ordinary "not found", and so does everyone while `ADMIN_EMAILS` isn't set. It's a secret rather than a var only so the address isn't in this public repo.
@@ -146,6 +155,11 @@ worker/guard.js    shared origin check and rate limit
 worker/wallet.js   the account's wallet: charges, tickets, refunds, earning (D1)
 worker/pay.js      Razorpay orders, payment checks and signed notifications
 worker/admin.js    the owner's analytics (/admin, /api/admin/stats), only for ADMIN_EMAILS
+worker/feed.js     the live industry feed: sources, AI takeaways, /api/feed
+worker/push.js     daily reminders: VAPID key, subscriptions, sending, the reminder text
+worker/pulse.js    the inspection pulse: shared debriefs, de-identified by the AI
+worker/league.js   weekly leagues
+worker/live.js     tables and helpers shared by the live features
 app/admin/         the analytics page (built into worker/admin-page.js)
 public/sw.js       offline copy of the app for use at sea
 app/src            app source (React, Tailwind v4, Magic UI components)

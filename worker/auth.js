@@ -10,12 +10,13 @@
 //   POST   /api/auth/google   { credential } → { user }   (sets the session cookie)
 //   POST   /api/auth/logout
 //   GET    /api/me            → { user } | 401
-//   DELETE /api/me            deletes the account, its sessions, saved state and wallet (payment records are
-//                             kept for the accounts, without name or email)
+//   DELETE /api/me            deletes the account, its sessions, saved state, wallet, reminders and shared
+//                             debriefs (payment records are kept for the accounts, without name or email)
 //   GET    /api/state         → { version, data }
 //   PUT    /api/state         { base, data } → { version } | 409 { version, data }
 import { limited, originAllowed, reply } from "./guard.js"
 import { ensureWalletSchema, startKey } from "./wallet.js"
+import { ensureLiveSchema } from "./live.js"
 
 const GOOGLE_CERTS = "https://www.googleapis.com/oauth2/v3/certs"
 const ISSUERS = ["accounts.google.com", "https://accounts.google.com"]
@@ -195,6 +196,7 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
 
   if (path === "/api/me" && method === "DELETE") {
     await ensureWalletSchema(env.DB)
+    await ensureLiveSchema(env.DB)
     const row = await env.DB.prepare("SELECT google_sub FROM users WHERE id = ?").bind(s.user.id).first()
     await env.DB.batch([
       // signing up again with the same Google account doesn't bring back the free starting credits
@@ -203,6 +205,8 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
       env.DB.prepare("DELETE FROM user_state WHERE user_id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(s.user.id),
       env.DB.prepare("DELETE FROM users WHERE id = ?").bind(s.user.id),
+      env.DB.prepare("DELETE FROM push_subs WHERE user_id = ?").bind(s.user.id),
+      env.DB.prepare("DELETE FROM debriefs WHERE user_id = ?").bind(s.user.id),
     ])
     return withCookie(reply(200, { ok: true }), cookieHeader(request, "", 0))
   }

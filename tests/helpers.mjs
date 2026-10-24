@@ -2,6 +2,7 @@
 import worker from "../worker/index.js"
 import { resetSchemaFlag } from "../worker/auth.js"
 import { resetWalletSchemaFlag } from "../worker/wallet.js"
+import { resetLiveSchemaFlag } from "../worker/live.js"
 import { fakeD1, fakeGoogle } from "./fakes.mjs"
 
 export const SITE = "https://nilobs.com"
@@ -37,6 +38,7 @@ globalThis.fetch = async (url, init = {}) => {
 export function freshEnv(extra = {}) {
   resetSchemaFlag()
   resetWalletSchemaFlag()
+  resetLiveSchemaFlag()
   return {
     DB: fakeD1(), GOOGLE_CLIENT_ID: CLIENT, ANTHROPIC_API_KEY: "k", RUMIK_API_KEY: "r",
     ASSETS: { fetch: async () => new Response("site") },

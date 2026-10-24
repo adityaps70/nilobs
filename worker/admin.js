@@ -2,11 +2,15 @@
 //
 // Only for the Google accounts listed in the ADMIN_EMAILS secret (comma-separated, set in Cloudflare). Everyone else,
 // signed in or not, gets the same plain "not found" as any page that doesn't exist, so the address gives nothing away.
-// Nothing here writes: it reads the tables the app already keeps (users, user_state, wallets, payments, starts).
-// It never returns what people typed, asked or photographed (chats, answers, briefs and drafts stay out).
+// It reads the tables the app already keeps (users, user_state, wallets, payments, starts, and the live features'
+// feed_sources, push_subs, debriefs). The one thing it changes is whether a shared debrief shows in the pulse.
+// It never returns what people typed, asked or photographed (chats, answers, briefs and drafts stay out); for
+// shared debriefs it shows only the de-identified version others see.
 import { ensureSchema, getSession } from "./auth.js"
 import { ensureWalletSchema } from "./wallet.js"
-import { limited, reply } from "./guard.js"
+import { limited, originAllowed, reply } from "./guard.js"
+import { ensureLiveSchema } from "./live.js"
+import { SOURCES } from "./feed.js"
 import { ROLES, ROLE_GROUPS } from "../app/src/roles.ts"
 import ADMIN_PAGE from "./admin-page.js"
 
@@ -46,7 +50,9 @@ export async function handleAdmin(request, env) {
   if (!isPage && !isApi) return null
   // exactly what any address that doesn't exist gets
   const notFound = () => (isApi ? reply(404, { error: "Not found" }) : env.ASSETS.fetch(request))
-  if (!env.DB || request.method !== "GET") return notFound()
+  const isHide = url.pathname === "/api/admin/pulse"
+  if (!env.DB || (request.method !== "GET" && !(isHide && request.method === "POST"))) return notFound()
+  if (request.method === "POST" && !originAllowed(request, env)) return notFound()
   if (await limited(request, env, { name: "admin", binding: null, perMinute: Number(env.NILOBS_ADMIN_PER_MINUTE || 30) })) return notFound()
   const admin = await adminUser(request, env)
   if (!admin) return notFound()
@@ -54,6 +60,18 @@ export async function handleAdmin(request, env) {
   if (url.pathname === "/api/admin/stats") {
     const stats = await computeStats(env.DB, Date.now())
     return new Response(JSON.stringify({ ...stats, admin: { email: admin.email, name: admin.name } }), { headers: { ...SECURE_HEADERS, "content-type": "application/json" } })
+  }
+  if (isHide) {
+    // hide a shared debrief from the pulse, or show it again
+    let body = {}
+    try {
+      body = await request.json()
+    } catch {
+      return reply(400, { error: "Body must be JSON" })
+    }
+    const to = body?.hidden ? "hidden" : "live"
+    const r = await env.DB.prepare("UPDATE debriefs SET status = ? WHERE id = ? AND status IN ('live', 'hidden') AND pub IS NOT NULL").bind(to, String(body?.id || "")).run()
+    return reply(r?.meta?.changes ? 200 : 404, { ok: !!r?.meta?.changes, status: to })
   }
   return notFound()
 }
@@ -110,6 +128,7 @@ function walletFacts(raw, now) {
 export async function computeStats(db, now = Date.now()) {
   await ensureSchema(db)
   await ensureWalletSchema(db)
+  await ensureLiveSchema(db)
   const all = async (sql) => (await db.prepare(sql).all()).results || []
   const [users, states, wallets, payments, startsRow] = await Promise.all([
     all(`SELECT id, email, name, created_at, last_seen FROM users ORDER BY created_at DESC LIMIT ${MAX_ROWS}`),
@@ -229,6 +248,8 @@ export async function computeStats(db, now = Date.now()) {
       spot: num(stats.spot),
       stories: num(stats.stories),
       interviews: num(stats.interviews),
+      drillDay: String(obj(progress.drill).day || ""),
+      drills: num(obj(progress.drill).done),
       plan: wf.planId,
       balance: wf.balance,
       spent,
@@ -321,5 +342,42 @@ export async function computeStats(db, now = Date.now()) {
     products: [...products.entries()].map(([name, v]) => ({ name, n: v.n, revenue: v.revenue })).sort((a, b) => b.n - a.n),
     recentPayments,
     users: list.slice(0, LIST_MAX),
+    live: await liveStats(db, now, list),
+  }
+}
+
+/* ---------------- the live features ---------------- */
+async function liveStats(db, now, list) {
+  const all = async (sql, ...args) => (await db.prepare(sql).bind(...args).all()).results || []
+  const one = async (sql, ...args) => (await db.prepare(sql).bind(...args).first()) || {}
+  const src = new Map((await all("SELECT * FROM feed_sources")).map((r) => [r.id, r]))
+  const counts = new Map((await all("SELECT source, COUNT(*) AS n FROM feed_items WHERE status = 'live' AND published_at > ? GROUP BY source", now - 7 * DAY)).map((r) => [r.source, r.n]))
+  const feed = await one("SELECT SUM(CASE WHEN status = 'live' THEN 1 ELSE 0 END) AS live, SUM(CASE WHEN status = 'live' AND published_at > ? THEN 1 ELSE 0 END) AS day, SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS waiting FROM feed_items", now - DAY)
+  const push = await one("SELECT COUNT(*) AS n, COUNT(DISTINCT user_id) AS people FROM push_subs")
+  const email = new Map(list.map((u) => [u.id, u.email]))
+  const deb = await all("SELECT id, user_id, created_at, status, ship, role, pub, topics FROM debriefs ORDER BY created_at DESC LIMIT 30")
+  const week = await one("SELECT COUNT(*) AS n FROM debriefs WHERE status = 'live' AND created_at > ?", now - 7 * DAY)
+  const today = utcDay(now)
+  return {
+    sources: SOURCES.map((s) => {
+      const r = src.get(s.id) || {}
+      return { id: s.id, name: s.name, official: !!s.official, lastRun: Number(r.last_run) || 0, lastOk: Number(r.last_ok) || 0, error: r.last_error || "", found: Number(r.items) || 0, live7: Number(counts.get(s.id)) || 0 }
+    }),
+    feed: { live: Number(feed.live) || 0, day: Number(feed.day) || 0, waiting: Number(feed.waiting) || 0 },
+    reminders: { browsers: Number(push.n) || 0, people: Number(push.people) || 0 },
+    drillToday: list.filter((u) => u.drillDay === today).length,
+    drillPeople: list.filter((u) => u.drills > 0).length,
+    pulse: {
+      week: Number(week.n) || 0,
+      recent: deb.map((d) => {
+        let pub = {}
+        try {
+          pub = JSON.parse(d.pub || "{}")
+        } catch {
+          /* shown without details */
+        }
+        return { id: d.id, at: d.created_at, status: d.status, by: email.get(d.user_id) || "(deleted account)", role: d.role || "", ship: d.ship || "", summary: pub.summary || "", reason: pub.reason || "", questions: (pub.questions || []).length }
+      }),
+    },
   }
 }

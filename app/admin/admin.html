@@ -479,6 +479,8 @@ th button[aria-sort] { color: var(--ink); }
         function () { return table("People by company", ["Company", "People"], comp.map(function (r) { return [r.name, n(r.value)] }), [0, 1]) })
     }
 
+    if (d.live) main.appendChild(liveSection(d.live))
+
     if (d.recentPayments.length) {
       var pc = h("section", { class: "card", style: "margin-bottom:12px" }, h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Latest payments" }), h("div", { class: "note", text: "Newest first, including unfinished orders" }))))
       pc.appendChild(table("Latest payments", ["When", "Who", "What", "Amount", "Status"], d.recentPayments.map(function (p) { return [dateOf(p.at), p.who, p.product, money(p.amount, p.currency), p.status + (p.provider === "simulated" ? " (test)" : "")] }), [0, 0, 0, 1, 0]))
@@ -488,6 +490,54 @@ th button[aria-sort] { color: var(--ink); }
     main.appendChild(usersCard(d.users, d.truncated))
     // charts are drawn once the layout is settled, so each one is sized for its own card
     redraws.forEach(function (f) { f() })
+  }
+
+  /* ---------- the live features ---------- */
+  function liveSection(L) {
+    var box = h("div", { class: "grid g2", style: "margin-bottom:12px" })
+    var head = h("section", { class: "card", style: "grid-column:1/-1" },
+      h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Live features" }), h("div", { class: "note", text: "What brings people back each day" }))),
+      h("div", { class: "tiles", style: "margin-bottom:0" },
+        tile("Drills done today", n(L.drillToday), plural(L.drillPeople, "person has", "people have") + " done one"),
+        tile("Reminders on", n(L.reminders.people), plural(L.reminders.browsers, "browser")),
+        tile("Debriefs this week", n(L.pulse.week), "published in the pulse"),
+        tile("Feed updates, 24 h", n(L.feed.day), n(L.feed.live) + " live · " + n(L.feed.waiting) + " waiting for the AI")))
+    box.appendChild(head)
+    var ok = function (s) { return s.lastOk && (!s.lastRun || s.lastOk >= s.lastRun) }
+    box.appendChild(h("section", { class: "card" },
+      h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Feed sources" }), h("div", { class: "note", text: "Read every 3 hours. A broken source shows its last error." }))),
+      table("Feed sources", ["Source", "Status", "Last read", "Items found", "Live, 7 days"], L.sources.map(function (s) {
+        return [s.name + (s.official ? " (official)" : ""), s.lastRun ? (ok(s) ? "Working" : "Failing: " + (s.error || "no items")) : "Not read yet", s.lastRun ? ago(s.lastRun) : "—", n(s.found), n(s.live7)]
+      }), [0, 0, 0, 1, 1])))
+    var deb = h("section", { class: "card" },
+      h("div", { class: "card-head" }, h("div", null, h("h2", { text: "Shared debriefs" }), h("div", { class: "note", text: "Only the de-identified version is shown here and in the app" }))))
+    if (!L.pulse.recent.length) deb.appendChild(h("p", { class: "empty", text: "No debriefs shared yet." }))
+    else {
+      var list = h("div", { class: "scroll" })
+      var tb = h("tbody")
+      L.pulse.recent.forEach(function (x) {
+        var btn = (x.status === "live" || x.status === "hidden") ? h("button", { class: "toggle", type: "button", text: x.status === "live" ? "Hide" : "Show" }) : null
+        if (btn) btn.addEventListener("click", function () {
+          btn.disabled = true
+          fetch("/api/admin/pulse", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: x.id, hidden: x.status === "live" }) })
+            .then(function (r) { if (!r.ok) throw new Error(); x.status = x.status === "live" ? "hidden" : "live"; btn.textContent = x.status === "live" ? "Hide" : "Show"; status.textContent = x.status })
+            .catch(function () { btn.textContent = "Try again" })
+            .then(function () { btn.disabled = false })
+        })
+        var status = h("span", { class: "pill", text: x.status })
+        tb.appendChild(h("tr", null,
+          h("td", { text: dateOf(x.at) }),
+          h("td", null, status),
+          h("td", null, h("div", { class: "who" }, h("b", { text: x.summary || (x.reason ? "Not published: " + x.reason : "—") }), h("span", { text: [x.role, x.ship, plural(x.questions, "question")].filter(Boolean).join(" · ") }))),
+          h("td", { text: x.by }),
+          h("td", null, btn)))
+      })
+      list.appendChild(h("table", null, h("caption", { class: "sr", text: "Shared debriefs" }),
+        h("thead", null, h("tr", null, ["When", "Status", "What others see", "Shared by", ""].map(function (c) { return h("th", { scope: "col", text: c }) }))), tb))
+      deb.appendChild(list)
+    }
+    box.appendChild(deb)
+    return box
   }
 
   /* ---------- the user list ---------- */

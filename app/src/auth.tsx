@@ -462,6 +462,7 @@ function SignInSheet({ reason, onClose }: { reason: string | null; onClose: () =
 export function SignInPitch() {
   return (
     <ul className="flex flex-col gap-1.5 text-[13.5px] leading-snug text-mute">
+      <li>• Live industry updates and a 5-minute daily drill for your role</li>
       <li>• The AI inspector, Ask NilObs, Photo check and AI plans</li>
       <li>• Credits and plans you can buy, kept safe on your account</li>
       <li>• Your XP, streak and briefs on every phone and laptop</li>

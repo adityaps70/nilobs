@@ -3,7 +3,7 @@ import { PhoneApp, type Screen } from "@/components/PhoneApp"
 import { useWallet } from "@/credits"
 import { useNav } from "@/nav"
 
-const SCREENS: Screen[] = ["today", "stories", "setup", "loading", "brief", "practice", "drill", "bank", "share", "wallet", "train", "session", "spot", "radar", "kit", "me", "ask", "photo"]
+const SCREENS: Screen[] = ["today", "stories", "setup", "loading", "brief", "practice", "drill", "bank", "share", "wallet", "train", "session", "spot", "radar", "kit", "me", "ask", "photo", "live", "daily", "pulse", "league"]
 
 /** Reads #app/<screen> or #app/stories/<id> so the browser's Back button moves between screens. */
 function fromHash(): { screen?: Screen; storyId?: number | null } {
