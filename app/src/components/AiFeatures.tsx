@@ -65,16 +65,20 @@ function Thinking({ label = "Thinking" }: { label?: string }) {
   )
 }
 
-export function AiOff({ children, title }: { children?: ReactNode; title?: string }) {
+/**
+ * The AI can't run here. On nilobs.com that means "sign in with Google". A local test build (no NilObs server)
+ * has no sign-in and no AI.
+ */
+export function AiOff({ title }: { title?: string; what?: string; screen?: string }) {
   const gate = useAiGate()
   // on the NilObs site the AI is for signed-in users: show Google's button instead
-  if (HOSTED && gate === "closed") return <SignInForAi title={title} />
+  if (HOSTED) return gate === "closed" ? <SignInForAi title={title} /> : null
   return (
     <div className="flex gap-3 rounded-2xl border border-dashed border-line bg-surface p-4 text-[13.5px] leading-snug">
       <IconTile icon={I.Sparkle} color="violet" size={34} />
-      <span className="flex flex-col gap-1">
-        <b className="font-semibold">Sign in to Claude to switch on AI</b>
-        <span className="text-mute">{children ?? "Use the Sign in button at the top right of this page, then reload. The AI runs on your own Claude account, and Claude asks you once to allow it."}</span>
+      <span className="flex min-w-0 flex-col gap-1.5">
+        <b className="font-semibold">The AI isn't available in this copy</b>
+        <span className="text-mute">Sign-in, credits and the AI run on NilObs's own server.</span>
       </span>
     </div>
   )
@@ -365,7 +369,7 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
             <span className="text-[12px] text-white/60">Quick answers cost {COSTS.askQuick} credit, deep answers {COSTS.askDeep}. If an answer fails, the credits come straight back.</span>
           </section>
         )}
-        {sample === null && <AiOff />}
+        {sample === null && <AiOff what="ask NilObs" screen="ask" />}
         {!msgs.length && sample !== null && (
           <div className="flex flex-col gap-2">
             <span className="text-[12.5px] font-semibold text-mute">Try one</span>
@@ -468,7 +472,7 @@ export function AskScreen({ rank, ship, seed, seedAuto = true, clearSeed, openSt
                 ask(text)
               }
             }}
-            placeholder={sample === null ? (HOSTED ? "Sign in with Google to ask" : "Sign in to Claude (top right) to ask") : "Ask about the inspection…"}
+            placeholder={sample === null ? (HOSTED ? "Sign in with Google to ask" : "The AI isn't available in this view") : "Ask about the inspection…"}
             className="max-h-32 min-h-12 flex-1 resize-none rounded-xl border border-line bg-white/80 px-3 py-3 text-[14.5px] leading-snug outline-none focus:border-primary disabled:opacity-60"
           />
           {sample && !busy && <MicButton value={text} onChange={setText} />}
@@ -688,7 +692,7 @@ export function AiInspector({ rank, ship, fallback }: { rank: string; ship: stri
   if (sample === null)
     return (
       <>
-        <div className="px-5 pb-3"><AiOff title="Sign in with Google and the AI inspector grades your answers">Sign in to Claude at the top right, then reload, and the AI inspector will grade your answers. Until then, here's the practice version with set answers.</AiOff></div>
+        <div className="px-5 pb-3"><AiOff title="Sign in with Google and the AI inspector grades your answers" what="have your answers graded by the AI inspector" screen="practice" /></div>
         {fallback}
       </>
     )

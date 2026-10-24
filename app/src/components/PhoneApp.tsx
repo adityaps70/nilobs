@@ -24,6 +24,7 @@ import { FLEET_STATS, KIT_TOTAL, OBS, type DeckId } from "@/fleet"
 import { CHAPTERS, OCIMF_URL, SECTIONS, chapterOf, libForRank, officialFor, sectionOf } from "@/library"
 import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components/topicIcons"
 import { RolePicker, RoleSelect } from "@/components/RolePicker"
+import { AccountChip } from "@/auth"
 import { cleanRoleName, hasPreparedQuestions, isShore, roleOf, setCompany, setCurrentProfile, setCustomRole } from "@/roles"
 import { Chip, Label, Scroll, Section, TopBar } from "@/components/ui"
 import { BRAND, Logo, LogoMark } from "@/components/Brand"
@@ -240,7 +241,7 @@ export function PhoneApp({
     { k: "bank", label: "Questions", Icon: I.Book, target: "bank" },
     { k: "brief", label: "Inspection brief", Icon: I.Clipboard, target: brief ? "brief" : "setup" },
     { k: "kit", label: "Ready kit", Icon: I.Briefcase, target: "kit" },
-    { k: "me", label: "Progress & badges", Icon: I.Award, target: "me" },
+    { k: "me", label: "Profile & progress", Icon: I.Award, target: "me" },
     { k: "share", label: "Share a debrief", Icon: I.Plus, target: "share" },
     { k: "wallet", label: "Plans & credits", Icon: I.Wallet, target: "wallet" },
   ]
@@ -539,6 +540,7 @@ function Today(p: {
             <I.Moon size={18} />
           </button>
           <CreditPill onClick={() => p.go("wallet")} className="h-10" />
+          <AccountChip role={RANK_NAMES[p.rank] || p.rank} onProfile={() => p.go("me")} onPlans={() => p.go("wallet")} />
         </div>
       </header>
 

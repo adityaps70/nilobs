@@ -52,7 +52,7 @@ Anyone can practise without an account. The AI features (Ask NilObs, the AI insp
 - **Session:** an HttpOnly, Secure, SameSite=Lax cookie `nilobs_sid`, 30 days, extended while in use. State-changing routes check the request's origin.
 - **Sync (progress and screens, not credits):** the app writes to the browser as before; `app/src/auth.tsx` saves changes to `/api/state` a few seconds later and picks up other devices' changes when the app comes to the front. Two devices saving at once: the second one gets the newer copy back, merges (`app/src/sync.ts`: progress never goes backwards, newest screen wins) and saves again. A `wallet` sent to `/api/state` is dropped.
 - **Gate:** with `GOOGLE_CLIENT_ID` and `DB` set, `/api/ai` and `/api/voice` answer 401 to signed-out visitors. Without them, sign-in is simply off and the AI is open (how local tests run).
-- **Delete:** Progress & badges → Delete account erases the user, sessions, state and wallet. Payment records stay (no name or email), and a one-way hash of the Google ID is kept in `starts` so a new account with the same Google login doesn't get the free starting credits again. Pages: `public/privacy.html`, `public/terms.html`, `public/refunds.html` (served at `/privacy`, `/terms`, `/refunds`).
+- **Delete:** Profile & progress → Delete account erases the user, sessions, state and wallet. Payment records stay (no name or email), and a one-way hash of the Google ID is kept in `starts` so a new account with the same Google login doesn't get the free starting credits again. Pages: `public/privacy.html`, `public/terms.html`, `public/refunds.html` (served at `/privacy`, `/terms`, `/refunds`).
 
 ## The wallet on the server
 
@@ -61,7 +61,7 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 - **Charging:** the app calls `POST /api/wallet/spend { item, ref }` with what it wants (e.g. `{ kind: "photo", n: 2 }`); the server prices it from the plan and balance. For AI items it opens a **ticket** (id = `ref`) that `/api/ai` and `/api/voice` require: each ticket pays for a set number of answers, on set models, with a size limit, a photo count and an expiry. Without a valid ticket the AI answers 402.
 - **Refunds:** an AI charge is kept the moment the answer starts arriving. If nothing arrives, `POST /api/wallet/refund` gives it back (and a charge left hanging is refunded after 10 minutes). Replies that must be JSON (photo checks, grades) are checked on the server before anything is sent, so a malformed or "not a ship" reply is refundable and leaks nothing.
 - **Earning:** badges, levels and streak milestones pay once per account (`POST /api/wallet/earn`, and `/api/wallet/claims` after signing in); the chest once a day; shared debriefs within the daily and monthly limits. These are still reported by the app, so the most anyone can collect this way is the one-off rewards (about 630 credits) plus the chest and 4 debriefs a month.
-- Signed out (and in the Claude artifact) the app keeps a practice wallet in the browser, with simulated purchases.
+- Signed out (and in a local test build) the app keeps a practice wallet in the browser, with simulated purchases.
 
 ## Payments
 
@@ -125,7 +125,7 @@ The site is built from `app/src` (React + Tailwind) into one file, `public/index
 cd app && npm install && npm run build
 ```
 
-`npm run build:artifact` in `app/` builds the Claude-artifact version instead, where the AI runs on the viewer's own Claude account.
+`npm run build:artifact` in `app/` builds a single standalone file for local testing only: no sign-in and no AI. NilObs itself runs only on nilobs.com, where every AI call goes through our own server and API key.
 
 ## Layout
 

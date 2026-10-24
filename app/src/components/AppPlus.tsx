@@ -951,7 +951,7 @@ export function MeScreen({ go, profile, setProfile, night, setNight }: { go: (s:
   const nextReward = p.level.next ? EARN.level[p.level.n + 1] ?? 0 : 0
   return (
     <>
-      <TopBar title="Your progress" onBack={() => go("today")} />
+      <TopBar title="Your profile" onBack={() => go("today")} />
       <Scroll className="gap-4">
         <AccountCard />
         <section className="glass-deep flex flex-col gap-4 rounded-[24px] p-5">

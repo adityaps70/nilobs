@@ -10,7 +10,6 @@ import { BENCH, CARDS, CHAPTER_NAMES, DECKS, KIT_TOTAL, OBS, cardsFor } from "@/
 import { BADGES, LEVELS, useProgress } from "@/progress"
 import { useNav } from "@/nav"
 import { COSTS } from "@/credits"
-import { HOSTED } from "@/ai"
 import { cn } from "@/lib/utils"
 import { SectionHead } from "./top"
 
@@ -244,7 +243,7 @@ export function AiSection() {
             <button type="button" onClick={() => openApp({ screen: "practice" })} className="self-start text-[13.5px] font-semibold text-primary">Try the AI inspector →</button>
           </div>
         </div>
-        <p className="text-[12.5px] leading-snug text-mute">{HOSTED ? "AI features run on Claude." : "AI features run on Claude: sign in to Claude on this page to use them, on your own Claude account."} AI answers can be wrong: check them against your SMS and the current rules.</p>
+        <p className="text-[12.5px] leading-snug text-mute">AI features run on Claude, through NilObs. AI answers can be wrong: check them against your SMS and the current rules.</p>
       </div>
     </section>
   )

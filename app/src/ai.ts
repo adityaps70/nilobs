@@ -1,6 +1,6 @@
-// AI layer. The page asks Claude through the viewer's own Claude access (the `sample`
-// capability), so no API key ever lives in the page. Retrieval over the fleet data is done
-// here, in the page, and passed to Claude as context with citable ids.
+// AI layer. Every AI call goes to NilObs's own server (/api/ai on nilobs.com), which holds the Claude API key and
+// charges the signed-in user's NilObs credits; no key ever lives in the page, and users never need a Claude account.
+// Retrieval over the fleet data is done here, in the page, and passed to Claude as context with citable ids.
 import { useEffect, useState } from "react"
 import { CARDS, CHAPTER_NAMES, OBS, TYPE_NAME, type CardI, type Obs } from "@/fleet"
 import { RANK_NAMES, RANK_TOPICS } from "@/data"
@@ -47,7 +47,6 @@ async function blobBase64(b: Blob): Promise<string> {
   return btoa(bin)
 }
 const SERVER_IMAGES: ImageLimits = { maxCount: 3, maxInputBytes: 1_400_000, mediaTypes: ["image/jpeg", "image/png", "image/webp"] }
-type ClaudeGlobal = { use?: (n: string) => Promise<unknown> }
 
 // Hosted builds (your own domain) call your server at this path; the Claude-artifact build leaves it empty.
 declare const __AI_ENDPOINT__: string
@@ -55,27 +54,10 @@ export const AI_ENDPOINT: string = typeof __AI_ENDPOINT__ !== "undefined" ? __AI
 export const HOSTED = !!AI_ENDPOINT
 
 let cached: Promise<SampleFn | null> | null = null
+/** The AI always goes through NilObs's own server (our Claude API key, the user's NilObs credits). Elsewhere, none. */
 function getSample(): Promise<SampleFn | null> {
-  if (cached) return cached
-  if (HOSTED) {
-    cached = Promise.resolve(httpSample(AI_ENDPOINT))
-    return cached
-  }
-  const c = (typeof window !== "undefined" ? (window as unknown as { claude?: ClaudeGlobal }).claude : undefined)
-  cached = c?.use ? c.use("sample").then((f) => (f ? withoutTicket(f as SampleFn) : null)).catch(() => null) : Promise.resolve(null)
+  cached ??= Promise.resolve(HOSTED ? httpSample(AI_ENDPOINT) : null)
   return cached
-}
-/** Claude's own `sample` (in the artifact) doesn't take our ticket: pass everything else through. */
-function withoutTicket(f: SampleFn): SampleFn {
-  const strip = (o?: SampleOpts) => {
-    if (!o || !("ticket" in o)) return o
-    const { ticket: _t, ...rest } = o
-    return rest
-  }
-  const g = ((input: string | SampleMsg[], opts?: SampleOpts) => f(input, strip(opts))) as SampleFn
-  g.json = (input, opts) => f.json(input, strip(opts))
-  if (f.limits) g.limits = () => f.limits!()
-  return g
 }
 
 /* ---------------- your own server (/api/ai) ---------------- */
@@ -223,11 +205,11 @@ export function aiErrorCopy(e: AiErr) {
     case "not_declared":
     case "capability_disabled":
     case "capability_removed":
-      return "AI isn't switched on for this view. Allow Claude for this page to use it."
+      return "The AI isn't available in this copy."
     case "rate_limited":
       return "Lots of AI requests just now. Give it a minute, then try again."
     case "session_expired":
-      return HOSTED ? "Your sign-in ended. Sign in with Google again to use the AI." : "Sign in to Claude again to use the AI features."
+      return "Your sign-in ended. Sign in with Google again to use the AI."
     case "refused":
       return "Claude couldn't answer that one. Try asking it a different way."
     case "payment":

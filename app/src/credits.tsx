@@ -3,8 +3,8 @@
 //   purchases and refunds are worked out there; this browser only shows a copy. A charge appears on screen
 //   at once and the server confirms it a moment later; the AI or voice call it pays for carries its ticket.
 //   Editing this browser's storage changes nothing the server will accept.
-// - Signed out, or in the Claude artifact ("local"): a wallet kept in this browser. In the artifact the AI
-//   runs on the viewer's own Claude access, so these are practice credits and purchases are simulated.
+// - Signed out, or in a local test build ("local"): a wallet kept in this browser, with practice credits and
+//   simulated purchases. The AI itself only runs on nilobs.com, for signed-in users.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { motion } from "motion/react"
 

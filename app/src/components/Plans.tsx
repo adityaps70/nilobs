@@ -1,6 +1,6 @@
 // Plans, top-ups and the wallet screen.
 // Signed in on nilobs.com, purchases are real: paid through Cashfree and confirmed by the server.
-// Plans are prepaid and don't renew by themselves. Elsewhere (the Claude artifact) checkout is simulated.
+// Plans are prepaid and don't renew by themselves. Elsewhere (a local test build) checkout is simulated.
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { HOSTED } from "@/ai"
 import { useAuth } from "@/auth"

@@ -2,7 +2,7 @@
 // (The account's credits live on the server itself: see credits.tsx and worker/wallet.js.)
 //
 // Only on the hosted site (nilobs.com), and only when the server has sign-in set up (/api/auth/config).
-// In the Claude artifact the AI runs on the viewer's own Claude account, so none of this applies there.
+// A local test build has no sign-in and no AI (the AI only runs through nilobs.com's server).
 //
 // Sync works like another browser tab: the app keeps writing to localStorage as it always has; this layer
 // notices changes and saves them to the account, and writes the account's newer copy back into localStorage
@@ -516,6 +516,55 @@ export function SignInForAi({ title = "Sign in with Google to use the AI", child
       <b className="font-semibold">{title}</b>
       <span className="text-mute">{children ?? "It's free, and a new account starts with 80 credits. Signing in also keeps your progress on every device."}</span>
       <GoogleButton />
+    </div>
+  )
+}
+
+/** The account button for the top of the app: "Sign in" when signed out; your Google photo and a small menu when signed in. */
+export function AccountChip({ role, onProfile, onPlans }: { role?: string; onProfile: () => void; onPlans: () => void }) {
+  const a = useAuth()
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const out = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false)
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false)
+    document.addEventListener("mousedown", out)
+    document.addEventListener("keydown", key)
+    return () => {
+      document.removeEventListener("mousedown", out)
+      document.removeEventListener("keydown", key)
+    }
+  }, [open])
+  if (a.status === "off" || a.status === "loading") return null
+  if (a.status === "out" || !a.user)
+    return (
+      <button type="button" onClick={() => a.prompt("Sign in with Google")} className="h-9 shrink-0 rounded-full bg-primary px-3.5 text-[13px] font-semibold text-on-primary">
+        Sign in
+      </button>
+    )
+  const u = a.user
+  const initial = (u.name || u.email || "?").slice(0, 1).toUpperCase()
+  const item = "flex h-10 w-full items-center rounded-xl px-2.5 text-left text-[13.5px] font-semibold hover:bg-surface-2"
+  return (
+    <div ref={box} className="relative shrink-0">
+      <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={`Your account: ${u.name || u.email}`} onClick={() => setOpen((o) => !o)} className="flex size-10 items-center justify-center overflow-hidden rounded-full border border-line bg-surface">
+        {u.picture ? <img src={u.picture} alt="" referrerPolicy="no-referrer" className="size-full object-cover" /> : <span className="text-[15px] font-bold text-primary">{initial}</span>}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div role="menu" aria-label="Your account" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} className="sheet-panel absolute top-12 right-0 z-[70] flex w-[250px] max-w-[calc(100vw-24px)] flex-col gap-0.5 rounded-2xl border border-line p-2 text-ink shadow-2xl">
+            <span className="flex flex-col px-2.5 pt-1.5 pb-2">
+              <span className="truncate text-[14px] font-bold">{u.name || "Signed in"}</span>
+              <span className="truncate text-[12px] text-mute">{u.email}</span>
+              {role && <span className="mt-1 text-[12px] font-semibold text-primary">{role}</span>}
+            </span>
+            <button type="button" role="menuitem" onClick={() => (setOpen(false), onProfile())} className={item}>Your profile</button>
+            <button type="button" role="menuitem" onClick={() => (setOpen(false), onPlans())} className={item}>Plans & credits</button>
+            <button type="button" role="menuitem" onClick={() => (setOpen(false), a.signOut())} className={cn(item, "text-signal-ink")}>Sign out</button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
