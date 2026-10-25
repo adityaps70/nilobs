@@ -179,7 +179,7 @@ export function LandingHero() {
               <I.Target size={17} className="text-[#db4f10]" /> Play Spot the observation
             </a>
           </div>
-          <p className="text-[13.5px] text-mute">{HOSTED ? "No card, no sign-up to try it. Sign in free (Google or email) when you want to keep your progress on every device and use the AI." : "No card. Flashcards, the radar, the ready kit and the game are free every day."}</p>
+          <p className="text-[13.5px] text-mute">{HOSTED ? "No card. Sign in free to start: your credits and progress stay with your account on every device." : "No card. Flashcards, the radar, the ready kit and the game are free every day."}</p>
           <dl className="glass mt-1 grid grid-cols-2 gap-x-6 gap-y-4 rounded-[22px] p-5 sm:grid-cols-4">
             {[
               { v: STORIES.length, l: "inspection stories", icon: I.Newspaper, c: "rose" },

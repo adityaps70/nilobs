@@ -1,10 +1,10 @@
-// On nilobs.com the app opens straight away, signed in or not. Signed out, it's a guest: flashcards, the daily
-// drill, Spot the observation, the radar, stories and the live feed all work, and progress stays in this browser
-// until the first sign-in makes it the account's. The AI, buying, the pulse, leagues, crews and certificates ask
-// for a sign-in when they're opened. While the sign-in check (or a sign-in) is under way, a short wait screen shows.
+// On nilobs.com the app is for signed-in users, on every device: "Start free" (or any #app link, including a crew
+// invite) asks for a sign-in first (Google, or a code sent by email), and the app opens as soon as it goes through,
+// on the screen or plan the visitor picked. Where sign-in isn't set up (a local test build, or a server without
+// Google configured) the app opens as before.
 import type { ReactNode } from "react"
 import { motion } from "motion/react"
-import { SignInOptions, useAuth } from "@/auth"
+import { SignInOptions, SignInPitch, useAuth } from "@/auth"
 import { WELCOME_CREDITS } from "@/credits"
 import { useNav } from "@/nav"
 import { Logo } from "@/components/Brand"
@@ -13,19 +13,51 @@ import { cn } from "@/lib/utils"
 
 export function AppGate({ children }: { children: ReactNode }) {
   const { status, signingIn } = useAuth()
-  if (status === "loading" || signingIn) return <Waiting text={signingIn ? "Signing you in…" : "Opening NilObs…"} />
-  return <>{children}</>
+  if (status === "in" || status === "off") return <>{children}</>
+  return <SignInGate checking={status === "loading" ? "Checking your sign-in…" : signingIn ? "Signing you in…" : ""} />
 }
 
-function Waiting({ text }: { text: string }) {
+const invited = () => {
+  try {
+    return /^#app\/crew\/[A-Za-z0-9]+/.test(window.location.hash)
+  } catch {
+    return false
+  }
+}
+
+function SignInGate({ checking }: { checking: string }) {
   const { openSite } = useNav()
+  const { emailOn } = useAuth()
+  const crew = invited()
   return (
     <main className="relative z-10 flex min-h-[100dvh] items-center justify-center px-4 py-10">
-      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="sheet-panel flex w-full max-w-[420px] flex-col gap-4 rounded-[28px] border border-line p-6 text-ink shadow-2xl">
+      <motion.section
+        aria-labelledby="gate-title"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="sheet-panel flex w-full max-w-[420px] flex-col gap-4 rounded-[28px] border border-line p-6 text-ink shadow-2xl"
+      >
         <button type="button" onClick={() => openSite()} aria-label="NilObs: back to the site" className="self-start">
           <Logo size={34} />
         </button>
-        <p role="status" className="py-6 text-[14px] text-mute">{text}</p>
+        {checking ? (
+          <p role="status" className="py-6 text-[14px] text-mute">{checking}</p>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <h1 id="gate-title" className="display text-[25px] leading-tight font-bold">{crew ? "Sign in to join your crew" : "Sign in to start NilObs"}</h1>
+              <p className="text-[14px] leading-snug text-mute">
+                {crew ? "You were sent an invite link. Sign in (it's free) and you'll see the crew straight after. " : ""}
+                Free to start: a new account comes with {WELCOME_CREDITS} credits. Use your Google account{emailOn ? " or your email" : ""}, nothing to set up.
+              </p>
+            </div>
+            <SignInPitch />
+            <SignInOptions />
+            <button type="button" onClick={() => openSite()} className="h-10 text-[13.5px] font-semibold text-mute">
+              Back to the site
+            </button>
+          </>
+        )}
       </motion.section>
     </main>
   )
