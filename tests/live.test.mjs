@@ -51,7 +51,7 @@ function feedWorld(now) {
       return claudeText(JSON.stringify(out))
     }
     if (u.includes("gov.uk/api/search.json")) return new Response(JSON.stringify({ results: [{ title: "Explosion on a product tanker during cargo operations", link: "/maib-reports/explosion", description: "Investigation report.", public_timestamp: new Date(now - DAYMS).toISOString() }] }))
-    if (u === "https://safety4sea.com/feed/") return new Response(RSS([{ t: "Tokyo MOU PSC campaign on fire safety starts", u: "https://safety4sea.com/psc", at: now - 3600000, d: "Three-month campaign." }, { t: "Shipping company appoints new CEO", u: "https://safety4sea.com/ceo", at: now - 7200000, d: "Appointment." }, { t: "Old story about a tanker", u: "https://safety4sea.com/old", at: now - 40 * DAYMS, d: "Old." }]))
+    if (u === "https://gcaptain.com/feed/") return new Response(RSS([{ t: "Tokyo MOU PSC campaign on fire safety starts", u: "https://gcaptain.com/psc", at: now - 3600000, d: "Three-month campaign." }, { t: "Shipping company appoints new CEO", u: "https://gcaptain.com/ceo", at: now - 7200000, d: "Appointment." }, { t: "Old story about a tanker", u: "https://gcaptain.com/old", at: now - 40 * DAYMS, d: "Old." }]))
     if (u === "https://splash247.com/feed/") return new Response("down", { status: 503 })
     return new Response(RSS([]))
   }
@@ -85,14 +85,14 @@ test("the feed job keeps what's new and relevant, writes takeaways, records each
   assert.equal(Object.keys(r.sources).length, SOURCES.length, "every source gets its turn")
   assert.equal(r.sources.splash.ok, false)
   assert.match(r.sources.splash.error, /503/)
-  assert.equal(r.sources.safety4sea.recent, 2, "the 40-day-old story is skipped")
+  assert.equal(r.sources.gcaptain.recent, 2, "the 40-day-old story is skipped")
   assert.equal(r.live, 2, "the MAIB report (found by both GOV.UK searches, stored once) + the PSC story; the CEO story is skipped")
   assert.ok(!calls.prompts.join("").includes("Old story"), "old items never reach the AI")
   const feed = await call(env, "/api/feed").then(json)
   assert.equal(feed.status, 200)
-  const psc = feed.items.find((i) => i.url === "https://safety4sea.com/psc")
+  const psc = feed.items.find((i) => i.url === "https://gcaptain.com/psc")
   assert.equal(psc.kind, "detention")
-  assert.equal(psc.sourceName, "SAFETY4SEA")
+  assert.equal(psc.sourceName, "gCaptain")
   assert.deepEqual(psc.roles, ["deck"], "unknown roles dropped")
   assert.deepEqual(psc.topics, ["Emergency equipment"], "only the app's own topics")
   assert.ok(!feed.items.some((i) => /CEO/.test(i.title)))
@@ -120,26 +120,27 @@ test("a source without a fixed feed address: found from its page, then remembere
   const env = fresh()
   const now = Date.now()
   const html = `<html><head><link rel="alternate" type="application/rss+xml" title="News" href="/rss/news.xml"><link rel="alternate" type="application/rss+xml" href="/comments/feed"></head></html>`
-  assert.deepEqual(discoverFeeds(html, "https://www.news.uscg.mil/maritime-commons/"), ["https://www.news.uscg.mil/rss/news.xml"])
+  assert.deepEqual(discoverFeeds(html, "https://www.ukpandi.com/news-and-resources/"), ["https://www.ukpandi.com/rss/news.xml"])
   const seen = []
   const fetchImpl = async (url, init) => {
     const u = String(url)
     seen.push(u)
     if (u.startsWith("https://api.anthropic.com/")) return claudeText("[]")
-    if (u === "https://www.news.uscg.mil/maritime-commons/") return new Response(html, { headers: { "content-type": "text/html" } })
-    if (u === "https://www.news.uscg.mil/rss/news.xml") return new Response(RSS([{ t: "Marine safety alert: tanker cargo pump room fire", u: "https://www.news.uscg.mil/a/1", at: now - 3600000, d: "Alert." }]))
+    if (u === "https://www.ukpandi.com/news-and-resources/") return new Response(html, { headers: { "content-type": "text/html" } })
+    if (u === "https://www.ukpandi.com/rss/news.xml") return new Response(RSS([{ t: "Marine safety alert: tanker cargo pump room fire", u: "https://www.ukpandi.com/a/1", at: now - 3600000, d: "Alert." }]))
     if (u.includes("gov.uk")) return new Response(JSON.stringify({ results: [] }))
     return new Response("nope", { status: 404 })
   }
-  const r = await runFeed(env, now, fetchImpl)
-  assert.equal(r.sources.uscg.ok, true)
-  assert.equal(r.sources.uscg.recent, 1)
-  const key = await env.DB.prepare("SELECT v FROM app_keys WHERE k = 'feed_url:uscg'").first()
-  assert.equal(key.v, "https://www.news.uscg.mil/rss/news.xml")
+  let r = { sources: {} }
+  for (let i = 0; i < 8 && !("ukpandi" in r.sources); i++) r = await runFeed(env, now, fetchImpl)
+  assert.equal(r.sources.ukpandi.ok, true)
+  assert.equal(r.sources.ukpandi.recent, 1)
+  const key = await env.DB.prepare("SELECT v FROM app_keys WHERE k = 'feed_url:ukpandi'").first()
+  assert.equal(key.v, "https://www.ukpandi.com/rss/news.xml")
   seen.length = 0
-  for (let i = 0; i < 8; i++) if ("uscg" in (await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)).sources) break
-  assert.ok(seen.includes("https://www.news.uscg.mil/rss/news.xml"))
-  assert.ok(!seen.includes("https://www.news.uscg.mil/maritime-commons/"), "the page isn't fetched again")
+  for (let i = 0; i < 8; i++) if ("ukpandi" in (await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)).sources) break
+  assert.ok(seen.includes("https://www.ukpandi.com/rss/news.xml"))
+  assert.ok(!seen.includes("https://www.ukpandi.com/news-and-resources/"), "the page isn't fetched again")
 })
 
 test("without the AI, new items wait (nothing half-written is shown)", async () => {

@@ -28,6 +28,7 @@ import { RolePicker, RoleSelect } from "@/components/RolePicker"
 import { AccountChip, useAuth } from "@/auth"
 import { DailyDrill, DrillCard, LeagueCard, LeagueScreen, LiveCard, LiveScreen, PulseCard, PulseScreen, shareToPulse, type PulseShare } from "@/components/Live"
 import { CertScreen, CrewCertCards, CrewScreen } from "@/components/Crew"
+import { CloseoutScreen } from "@/components/Closeout"
 import { GuestBanner } from "@/app/AppGate"
 import { cleanRoleName, hasPreparedQuestions, isShore, roleOf, setCompany, setCurrentProfile, setCustomRole } from "@/roles"
 import { Chip, Label, Scroll, Section, TopBar } from "@/components/ui"
@@ -250,6 +251,7 @@ export function PhoneApp({
     { k: "stories", label: "Stories", Icon: I.Newspaper, target: "stories" },
     { k: "practice", label: "AI inspector", Icon: I.Mic, target: "practice" },
     { k: "photo", label: "Photo check", Icon: I.Camera, target: "photo" },
+    { k: "closeout", label: "Close-out helper", Icon: I.FileCheck, target: "closeout" },
     { k: "bank", label: "Questions", Icon: I.Book, target: "bank" },
     { k: "brief", label: "Inspection brief", Icon: I.Clipboard, target: brief ? "brief" : "setup" },
     { k: "kit", label: "Ready kit", Icon: I.Briefcase, target: "kit" },
@@ -326,6 +328,7 @@ export function PhoneApp({
               {screen === "league" && <LeagueScreen />}
               {screen === "crew" && <CrewScreen go={go} />}
               {screen === "cert" && <CertScreen go={go} rank={rank} />}
+              {screen === "closeout" && <CloseoutScreen go={go} />}
               {screen === "kit" && <KitScreen go={go} />}
               {screen === "me" && <MeScreen go={go} profile={profile} setProfile={setProfile} night={night} setNight={setNight} />}
               {screen === "share" && <Share night={night} />}
@@ -540,6 +543,7 @@ function Today(p: {
     { label: "Spot the observation", sub: `${OBS.length} real findings`, icon: I.Target, color: "orange", tag: <FreeTag />, onClick: () => p.go("spot") },
     { label: "Flashcards", sub: due ? `${due} due today` : "10 fresh cards ready", icon: I.Layers, color: "blue", tag: <FreeTag />, onClick: () => p.go("train") },
     { label: "Photo check", sub: "What would an inspector flag?", icon: I.Camera, color: "indigo", tag: <CostTag cost={COSTS.photo} className="text-mute" />, onClick: () => p.go("photo") },
+    { label: "Close-out helper", sub: "Root cause, actions, comment", icon: I.FileCheck, color: "teal", tag: <CostTag cost={COSTS.closeout} className="text-mute" />, onClick: () => p.go("closeout") },
     { label: "Ready kit", sub: `${KIT_TOTAL} pre-inspection checks`, icon: I.Briefcase, color: "amber", tag: <FreeTag />, onClick: () => p.go("kit") },
     { label: "Official checklist", sub: `${lib.length} questions for your role`, icon: I.ListCheck, color: "teal", tag: <FreeTag />, onClick: p.openLibrary },
     { label: "Inspection brief", sub: p.brief ? "Open your brief" : "Your oil major, port and rank", icon: I.Clipboard, color: "sky", tag: p.brief ? <FreeTag label="Ready" /> : <CostTag cost={COSTS.brief} className="text-mute" />, onClick: () => p.go(p.brief ? "brief" : "setup") },
@@ -596,7 +600,7 @@ function Today(p: {
 
       <CrewCertCards go={p.go} rank={p.rank} />
 
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
         {actions.map((a, i) => (
           <motion.button
             key={a.label}

@@ -190,7 +190,7 @@ export function AiSection() {
   const feats = [
     { icon: I.Mic, c: "violet", t: "AI inspector", s: "Five questions for your rank or role, typed or spoken. In a voice interview the inspector reads each question aloud and you answer out loud. Every answer is graded on the fact, the procedure and the record.", tag: `${COSTS.interview} credits` },
     { icon: I.Sparkle, c: "indigo", t: "Ask NilObs", s: `Ask anything. Answers draw on ${OBS.length} real observations and ${CARDS.length} Q&As, and show the records they came from. Quick or deep.`, tag: `from ${COSTS.askQuick} credit` },
-    { icon: I.FileCheck, c: "teal", t: "Close-out drafts", s: "On any observation: why it was raised, the likely root cause, the fix on board, and a close-out response you can copy. Saved for next time.", tag: `${COSTS.explain} credit` },
+    { icon: I.FileCheck, c: "teal", t: "Close-out helper", s: "Paste an observation from your own inspection. Get the root cause, corrective and preventive actions, the evidence to attach and an operator's comment ready to submit. Ship names and IMO numbers are taken out first.", tag: `${COSTS.closeout} credits` },
     { icon: I.Camera, c: "sky", t: "Photo check", s: "Snap an area, a piece of equipment or a record. See what an inspector would flag, why, and how to fix it first, with similar findings from real inspections. Photos aren't stored.", tag: `${COSTS.photo} credits a photo` },
   ] as const
   return (

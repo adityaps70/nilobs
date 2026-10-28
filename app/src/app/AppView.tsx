@@ -4,7 +4,7 @@ import { useWallet } from "@/credits"
 import { useNav } from "@/nav"
 import { pendingJoin } from "@/components/Crew"
 
-const SCREENS: Screen[] = ["today", "stories", "setup", "loading", "brief", "practice", "drill", "bank", "share", "wallet", "train", "session", "spot", "radar", "kit", "me", "ask", "photo", "live", "daily", "pulse", "league", "crew", "cert"]
+const SCREENS: Screen[] = ["today", "stories", "setup", "loading", "brief", "practice", "drill", "bank", "share", "wallet", "train", "session", "spot", "radar", "kit", "me", "ask", "photo", "live", "daily", "pulse", "league", "crew", "cert", "closeout"]
 
 /** Reads #app/<screen>, #app/stories/<id> or #app/crew/<invite code> so the browser's Back button moves between screens. */
 function fromHash(): { screen?: Screen; storyId?: number | null } {

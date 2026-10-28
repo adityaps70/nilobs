@@ -52,7 +52,7 @@ export function AiChip({ className }: { className?: string }) {
   )
 }
 
-function Thinking({ label = "Thinking" }: { label?: string }) {
+export function Thinking({ label = "Thinking" }: { label?: string }) {
   return (
     <span className="flex items-center gap-2 text-[13.5px] font-medium text-mute" role="status">
       <span className="flex gap-1">
@@ -1127,6 +1127,7 @@ No invented regulation numbers or OCIMF wording; say "check your SMS" where it d
       {err && <p className="text-[12.5px] font-medium text-signal-ink">{err}</p>}
       {state === "busy" && <button type="button" onClick={() => ctl.current?.abort()} className="self-start text-[12px] font-semibold text-mute underline underline-offset-2">Stop</button>}
       {state === "error" && <button type="button" onClick={run} className="flex h-9 items-center gap-1.5 self-start rounded-full border border-[#d9cffd] bg-white/70 px-3 text-[12.5px] font-semibold text-[#5a3bd1]"><I.Refresh size={14} /> Try again · {COSTS.explain} credit</button>}
+      {state === "done" && <span className="text-[11.5px] text-mute">Got an observation of your own? Paste it into the Close-out helper (in the menu) for a full draft.</span>}
       {state === "done" && /close-out/i.test(out) && (
         <button type="button" onClick={copyCloseOut} className="flex h-9 items-center gap-1.5 self-start rounded-full bg-[#5a3bd1] px-3 text-[12.5px] font-semibold text-white">
           {copied ? <><I.Check size={14} /> Copied</> : <><I.FileText size={14} /> Copy the close-out response</>}

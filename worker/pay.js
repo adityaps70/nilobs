@@ -7,6 +7,7 @@
 //                                   (HMAC-SHA256 of "order_id|payment_id" with the key secret) is checked, then
 //                                   Razorpay's API is asked about the payment itself (amount, currency, order,
 //                                   captured). An authorized payment is captured here.
+//   (auto-renewing plans: worker/subs.js)
 //   POST /api/pay/razorpay/webhook  Razorpay's own notification (signed: HMAC-SHA256 of the raw body with the
 //                                   webhook secret, in X-Razorpay-Signature), which covers a closed tab.
 //
@@ -21,6 +22,7 @@ import * as E from "../app/src/economy.ts"
 import { reply } from "./guard.js"
 import { HttpError, checkoutModes, ensureWalletSchema, errorReply, mutate, readWallet, view } from "./wallet.js"
 import { applyFleet, fleetOrder, parseFleetKey } from "./crews.js"
+import { SUB_ON, ensureSubsSchema, handleSubs, subscriptionEvent } from "./subs.js"
 
 const API = "https://api.razorpay.com/v1"
 const enc = new TextEncoder()
@@ -39,7 +41,7 @@ export async function hmacHex(secret, text) {
   return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("")
 }
 /** Compares two strings without leaking where they differ. */
-function same(a, b) {
+export function same(a, b) {
   a = String(a || "")
   b = String(b || "")
   if (!a || a.length !== b.length) return false
@@ -136,6 +138,7 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
     if (path === "/api/pay/razorpay/webhook") return await razorpayWebhook(request, env)
     if (!user) return reply(401, { error: "Sign in to buy" })
     if (path === "/api/pay/receipts" && request.method === "GET") return reply(200, { receipts: await receiptsOf(env, user.id) })
+    if (path === "/api/pay/subscription" && request.method === "GET") return await handleSubs(path, request, env, user, null, fetchImpl)
     if (request.method !== "POST") return reply(405, { error: "Use POST" })
     let body = {}
     try {
@@ -159,6 +162,13 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
         const { data } = await readWallet(env, user.id)
         const can = E.canBuy(data.w, key, Date.now())
         if (!can.ok) return reply(409, { error: can.why, code: "cannot_buy" })
+        if (p.kind === "plan") {
+          // another plan while auto-renew is on would be charged twice: turn auto-renew off first
+          await ensureSubsSchema(env.DB)
+          const on = await env.DB.prepare(`SELECT product FROM subscriptions WHERE user_id = ? AND status IN (${SUB_ON.map(() => "?").join(",")}) LIMIT 1`).bind(user.id, ...SUB_ON).first()
+          if (on && E.product(on.product)?.planId !== p.planId)
+            return reply(409, { error: `Auto-renew is on for ${E.product(on.product)?.name.split(",")[0] || "your plan"}. Turn it off in Plans & credits first, then change plan.`, code: "cannot_buy" })
+        }
       }
       const mode = checkoutModes(env)[cur]
       if (!mode) return reply(503, { error: cur === "INR" ? "Payments in rupees aren't open yet." : "Payments in dollars aren't open yet. You can pay in rupees with an international card.", code: "payments_closed" })
@@ -216,6 +226,9 @@ export async function handlePay(request, env, user, fetchImpl = fetch) {
       return reply(200, { status: "paid", ...view(env, w.data, w.version) })
     }
 
+    const subs = await handleSubs(path, request, env, user, body, fetchImpl)
+    if (subs) return subs
+
     return reply(404, { error: "Not found" })
   } catch (e) {
     return errorReply(e)
@@ -234,7 +247,8 @@ async function razorpayWebhook(request, env) {
     return reply(400, { error: "Bad body" })
   }
   const payment = ev?.payload?.payment?.entity
-  if ((ev?.event === "payment.captured" || ev?.event === "order.paid") && payment?.status === "captured") {
+  if (String(ev?.event || "").startsWith("subscription.")) await subscriptionEvent(env, ev)
+  else if ((ev?.event === "payment.captured" || ev?.event === "order.paid") && payment?.status === "captured") {
     const orderId = String(payment.order_id || ev?.payload?.order?.entity?.id || "")
     const pay = orderId ? await findPayment(env, "provider = 'razorpay' AND ref = ?", orderId) : null
     if (pay) await grantOrMark(env, pay, payment.id, { amount: payment.amount, currency: payment.currency })

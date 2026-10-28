@@ -59,7 +59,7 @@ export default {
       if (request.method !== "GET" && !originAllowed(request, env)) return reply(403, { error: "Origin not allowed" })
       if (request.method !== "GET" && (await limited(request, env, { name: "wallet", binding: env.WALLET_LIMIT, perMinute: Number(env.NILOBS_WALLET_PER_MINUTE || 60) })))
         return reply(429, { error: "Too many requests. Try again in a minute." })
-      if (url.pathname === "/api/pay/order" && (await limited(request, env, { name: "pay", binding: env.PAY_LIMIT, perMinute: Number(env.NILOBS_PAY_PER_MINUTE || 8) })))
+      if ((url.pathname === "/api/pay/order" || url.pathname === "/api/pay/subscribe") && (await limited(request, env, { name: "pay", binding: env.PAY_LIMIT, perMinute: Number(env.NILOBS_PAY_PER_MINUTE || 8) })))
         return reply(429, { error: "Too many payment attempts. Try again in a minute." })
       const s = await getSession(request, env)
       if (!s) return reply(401, { error: "Sign in first" })

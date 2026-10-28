@@ -1,6 +1,6 @@
 # NilObs
 
-**Aim for nil.** SIRE 2.0 inspection prep for tanker crews: real observations, rank-wise flashcards, inspection stories, a ready kit, daily missions, and Claude-powered AI (an AI inspector that grades answers, with an optional voice interview; Ask NilObs with sources; Photo check, which looks at a photo the way an inspector would; close-out drafts; a day-by-day prep plan).
+**Aim for nil.** SIRE 2.0 inspection prep for tanker crews: real observations, rank-wise flashcards, inspection stories, a ready kit, daily missions, and Claude-powered AI (an AI inspector that grades answers, with an optional voice interview; Ask NilObs with sources; Photo check, which looks at a photo the way an inspector would; the Close-out helper, which turns your own observation into root cause, corrective and preventive actions, evidence and an operator's comment; a day-by-day prep plan).
 
 This repo deploys to **Cloudflare Workers**. The Worker serves the site from `public/`, runs the AI endpoint at `/api/ai` and the voice endpoint at `/api/voice`. Your API keys stay on Cloudflare as secrets and never reach the browser.
 
@@ -28,9 +28,9 @@ Modelled on usage-credit products such as Emergent: try everything free, then pa
 | Voyage pass | ₹1,199 / $15 once | 1,000 for 180 days | Watchkeeper perks for 6 months, nothing renews |
 | Top-ups | ₹249 / ₹699 / ₹1,499 ($3 / $9 / $19) | 150 / 500 / 1,200 | Never expire |
 
-What things cost: quick AI answer 1, deep answer 4, expert answer 8 (Command), observation close-out 1, photo check 3 a photo, AI inspector interview 8 (12 with the studio voice), brief with AI plan 20, a new plan 3, a role pack (AI flashcards and checklist) 3, a story 5, a specialist deck 40, listening to an answer 1, a streak freeze 10. Failed AI calls are refunded automatically.
+What things cost: quick AI answer 1, deep answer 4, expert answer 8 (Command), why an observation was raised 1, Close-out helper 4, photo check 3 a photo, AI inspector interview 8 (12 with the studio voice), brief with AI plan 20, a new plan 3, a role pack (AI flashcards and checklist) 3, a story 5, a specialist deck 40, listening to an answer 1, a streak freeze 10. Failed AI calls are refunded automatically.
 
-Plans are **prepaid and never renew by themselves**: buying the same plan again adds a month or a year; moving up to a higher plan starts it now and turns the lower plan's months still to come into credits that don't expire; a lower plan can't be bought while a higher one runs.
+Plans are **prepaid, and renew only if the buyer picks auto-renew** (see Payments): buying the same plan again adds a month or a year; moving up to a higher plan starts it now and turns the lower plan's months still to come into credits that don't expire; a lower plan can't be bought while a higher one runs.
 
 Credits are spent soonest-expiring first: plan credits refill every 30 days and don't roll over, welcome credits last 30 days, credits earned in the app last 30 days, top-ups never expire.
 
@@ -67,7 +67,7 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 
 ## Live features (worth opening every day)
 
-- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): the Worker reads public sources about every 3 hours, a few per run, oldest first (UK MAIB reports and MCA guidance through GOV.UK's search API; the US Coast Guard, Paris MoU and AMSA; OCIMF, CHIRP Maritime and P&I clubs (Britannia, UK P&I, Gard, NorthStandard, Steamship Mutual); and SAFETY4SEA, Splash247, gCaptain, Marine Insight, The Maritime Executive and Hellenic Shipping News). A source without a fixed feed address is found from its page's `<link rel="alternate">` and remembered; one that fails is retried after 12 hours. It keeps what's new, and has Claude (the quick model) judge each item's relevance to tanker crews and write a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
+- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): the Worker reads public sources about every 3 hours, a few per run, oldest first (UK MAIB reports and MCA guidance through GOV.UK's search API; CHIRP Maritime and the P&I clubs Britannia and UK P&I; and Splash247, gCaptain, Marine Insight, The Maritime Executive, Hellenic Shipping News, Offshore Energy and Seatrade Maritime. The US Coast Guard, Paris MoU, AMSA, OCIMF, Gard, NorthStandard, Steamship Mutual and SAFETY4SEA were dropped: they block automated readers or have no readable feed). A source without a fixed feed address is found from its page's `<link rel="alternate">` and remembered; one that fails is retried after 12 hours. It keeps what's new, and has Claude (the quick model) judge each item's relevance to tanker crews and write a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
 - **Today's drill**: 3 flashcards (your brief's focus topics if the inspection is within 21 days, otherwise your weakest), 2 Spot rounds and one live update; +30 XP once a day (`progress.drill`).
 - **Daily reminders** (`worker/push.js`, `public/sw.js`): opt-in web push at the hour each person picks, in their own time zone, once a day. The Worker makes its own VAPID signing key on first use (kept in D1), sends empty pushes, and the service worker asks `/api/push/message` for a personal line (inspection countdown, streak, new updates). Only Google, Mozilla, Apple and Microsoft push addresses are accepted. On iPhone it works once NilObs is added to the Home Screen.
 - **Inspection pulse** (`worker/pulse.js`): debriefs shared from the app are checked and de-identified by Claude (names of ships, people, companies, oil majors, terminals and ports removed; a last regex pass catches ship prefixes, IMO numbers and emails). Others see only that version, plus trending topics for the last 14 days. Three a day per person; the owner can hide any of them on the dashboard.
@@ -80,6 +80,10 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 - **Fleet plans:** the owner buys seats through Razorpay (product `fleet:<crew>:<new|renew|add>:<seats>:<monthly|annual>`, priced by `fleetQuote` in `app/src/economy.ts`: ₹399 or $5 a seat a month, from 5 seats, a year for ten months, extra seats at the monthly price for each month left). Members take seats in the order they joined; a seat is Watchkeeper until the fleet's paid end, applied to the member's wallet the next time it's read (`seatFor` in `worker/wallet.js`). Someone who leaves keeps their seat to the end of the period. The owner gets a **readiness report** (name, email, role, last active, streak, drills, XP this week, practice scores by topic, weakest topics; CSV download). Members are told exactly that before joining a fleet.
 - **Certificates** (`app/src/cert.ts`, `worker/certs.js`): earned from synced progress (5+ cards in every topic for the role, 7 daily drills, an AI inspector session scored 6/10+). The public page `nilobs.com/c/<number>` is printable and is how anyone checks one. It says it isn't an official or STCW certificate.
 - **Receipts:** `GET /api/pay/receipts` lists the account's payments (Plans & credits shows them); `/receipt/<payment id>` is a printable receipt for the account that paid, from `NILOBS_BILLING_NAME` (Sea N Shore IT Solutions LLP). No GST is charged, so it's a payment receipt, not a tax invoice.
+
+## Public topic pages (for search engines)
+
+`app/seo/pages.ts` writes a page for each SIRE 2.0 topic at build time (`public/sire/<topic>.html`, served as `/sire/<topic>`), plus `/sire/` (the index), `/sitemap.xml` and `/robots.txt`. Each page explains why inspectors look at the topic, what to have ready, the records they ask for, a few real questions with model answers, de-identified observations from the fleet data and the roles that answer for it, with structured data (breadcrumbs, article, FAQ). They are plain HTML, so they load fast and are readable without the app. After a deploy, submit `https://nilobs.com/sitemap.xml` in Google Search Console.
 
 ## About and content review
 
@@ -106,11 +110,17 @@ For the owner only. Set the Cloudflare **secret** `ADMIN_EMAILS` to the Google a
 Payments go through **Razorpay** (`worker/pay.js`): UPI, cards, netbanking and wallets. Prices come only from `app/src/economy.ts`. The Worker creates a Razorpay order at that price and the app opens Razorpay Checkout for it. Credits are added only once the money is captured: the browser hands back Razorpay's payment id and signature (HMAC-SHA256 of `order_id|payment_id` with the key secret), the Worker checks the signature and then asks Razorpay about the payment itself (right order, right amount, captured; an authorized payment is captured there). Razorpay's signed webhook (HMAC-SHA256 of the raw body with the webhook secret) covers a closed tab, and a page that went away mid-payment checks the order again when it comes back. Each payment is credited once (a `pay:<id>` claim), however many times it's confirmed.
 
 1. In the Razorpay Dashboard, switch to **Test mode** and open Account & Settings → API Keys → Generate Key. Add the Key ID and Key Secret as Cloudflare secrets `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` (nilobs → Settings → Variables and Secrets).
-2. In Razorpay, Account & Settings → Webhooks → Add New Webhook: URL `https://nilobs.com/api/pay/razorpay/webhook`, a secret you make up, and the events `payment.captured` and `order.paid`. Add the same secret in Cloudflare as `RAZORPAY_WEBHOOK_SECRET`.
+2. In Razorpay, Account & Settings → Webhooks → Add New Webhook: URL `https://nilobs.com/api/pay/razorpay/webhook`, a secret you make up, and the events `payment.captured`, `order.paid` and, for auto-renew, `subscription.charged`, `subscription.activated`, `subscription.pending`, `subscription.halted`, `subscription.cancelled` and `subscription.completed`. Add the same secret in Cloudflare as `RAZORPAY_WEBHOOK_SECRET`.
 3. Buy something on nilobs.com with Razorpay's test card or test UPI and check the credits arrive.
 4. When the account is activated, generate live keys (and a live-mode webhook) and replace the secrets. Keys starting `rzp_test_` take test payments, `rzp_live_` real ones.
 
 Prices are in rupees. Paying in dollars stays closed ("pay in rupees with an international card") until Razorpay turns on international payments for the account; then set `RAZORPAY_CURRENCIES` to `INR,USD` in `wrangler.jsonc`. Until the key secrets are set, buying shows "Payments in rupees open soon". `NILOBS_SIMULATED_CHECKOUT = "1"` turns on free test purchases for demos (never on the live site). Every payment is recorded in the D1 table `payments`.
+
+### Auto-renew (Razorpay Subscriptions)
+
+When buying a plan in rupees, people choose **Pay once** (the default) or **Renew automatically** (`worker/subs.js`). Auto-renew makes a Razorpay plan once per price (every 30 days for monthly plans, every 360 days for yearly ones, the same lengths as NilObs plans) and a subscription for the buyer; Checkout takes the first payment and sets up the UPI Autopay, card or e-mandate, and Razorpay notifies the customer before each later charge. Each charge (from Checkout's signed reply or the `subscription.charged` webhook) is credited once, through its own `payments` row and wallet claim, and extends the plan from where its term ended (`grantRenewal` in `app/src/economy.ts`). At the end of a term an auto-renewing plan waits up to 7 days for the charge, without that month's credits, before it lapses. While auto-renew is on, a different plan can't be bought (it would be charged twice). **Plans & credits → Turn off auto-renew** cancels it at Razorpay at once and the paid time runs out normally; deleting the account cancels it first.
+
+Razorpay has to have Subscriptions switched on for the account. The Worker asks Razorpay's plan API at most every 12 hours and only offers auto-renew when it answers; set `RAZORPAY_SUBSCRIPTIONS = "0"` to hide it. Subscriptions are kept in the D1 table `subscriptions`; the dashboard shows how many are on.
 
 ## Photo check
 
@@ -120,6 +130,13 @@ Crew photograph an area, a piece of equipment or a record (up to 3 photos per ch
 - The app asks crews to keep faces, the ship's name and the IMO number out of the frame, and Claude is told never to write any of them down.
 - Photos always use `NILOBS_MODEL` (the vision model), have their own per-IP limit (`NILOBS_PHOTO_PER_MINUTE`, default 4) and are checked on the server: at most 3 per request, JPEG/PNG/WebP/GIF, about 1.5 MB each.
 - If the photo isn't of a ship, the check is refunded. The pure logic (areas, examples, prompt, clean-up of the reply) is in `app/src/photo.ts`, tested in `app/tests/photo.test.mjs`.
+
+## Close-out helper
+
+An officer pastes an observation from their own inspection, optionally with the SIRE 2.0 chapter, the type (Human, Process, Hardware), what's already been done and how their company words close-outs. Claude drafts what the inspector saw, the root cause, the immediate correction, corrective and preventive actions, evidence to attach, owners and target dates, and an operator's comment ready to submit (4 credits, refunded if nothing comes back).
+
+- Ship names (MT/MV …), IMO numbers and email addresses are taken out in the browser before anything is sent (`scrubObservation` in `app/src/components/Closeout.tsx`); the prompt tells Claude never to name people, ships or companies, nor to invent regulation or OCIMF question numbers.
+- The last 12 drafts are kept in the browser (`sr.closeouts`) and synced with the account like other progress. The operator's comment can be copied on its own, and the whole draft saved as a Word file.
 
 ## Keep costs under control
 
@@ -175,6 +192,7 @@ worker/voice.js    voice endpoint: Rumik text-to-speech, cached per line
 worker/guard.js    shared origin check and rate limit
 worker/wallet.js   the account's wallet: charges, tickets, refunds, earning (D1)
 worker/pay.js      Razorpay orders, payment checks and signed notifications
+worker/subs.js     auto-renewing plans (Razorpay Subscriptions)
 worker/admin.js    the owner's analytics (/admin, /api/admin/stats), only for ADMIN_EMAILS
 worker/feed.js     the live industry feed: sources, AI takeaways, /api/feed
 worker/push.js     daily reminders: VAPID key, subscriptions, sending, the reminder text
@@ -197,7 +215,9 @@ app/src/sync.ts    merge rules for two devices' copies of progress (pure, tested
 app/src/credits.tsx the wallet in the app: the server's copy when signed in, a practice wallet otherwise
 worker/auth.js     Google token check, sessions, /api/me, /api/state (D1)
 migrations/        D1 schema
-app/build.mjs      builds public/index.html
+app/build.mjs      builds public/index.html, the admin page and the topic pages
+app/seo/pages.ts   public SIRE 2.0 topic pages, sitemap.xml and robots.txt
+app/src/components/Closeout.tsx  the Close-out helper
 tests/             Worker, sign-in, wallet and payment tests (app/tests: economy, purchases, Photo check, sync)
 ```
 

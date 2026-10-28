@@ -13,23 +13,19 @@ import { DAY, TOPICS, claudeJson, cleanTopics, ensureLiveSchema, json, plain, sh
 export const SOURCES = [
   { id: "maib", name: "UK MAIB", kind: "govuk", official: true, urls: ["https://www.gov.uk/api/search.json?filter_content_store_document_type=maib_report&order=-public_timestamp&count=15"] },
   { id: "mca", name: "UK MCA", kind: "govuk", official: true, urls: ["https://www.gov.uk/api/search.json?filter_organisations=maritime-and-coastguard-agency&filter_format=guidance&filter_format=statutory_guidance&order=-public_timestamp&count=15"] },
-  { id: "uscg", name: "US Coast Guard", kind: "rss", official: true, urls: [], home: "https://www.news.uscg.mil/maritime-commons/" },
-  { id: "parismou", name: "Paris MoU", kind: "rss", official: true, urls: ["https://parismou.org/rss.xml"], home: "https://parismou.org/" },
-  { id: "amsa", name: "AMSA (Australia)", kind: "rss", official: true, urls: ["https://www.amsa.gov.au/rss.xml"], home: "https://www.amsa.gov.au/news-community/news-and-media-releases" },
-  { id: "ocimf", name: "OCIMF", kind: "rss", urls: [], home: "https://www.ocimf.org/news" },
   { id: "chirp", name: "CHIRP Maritime", kind: "rss", urls: ["https://chirp.co.uk/feed/"], home: "https://chirp.co.uk/maritime/" },
   { id: "britannia", name: "Britannia P&I", kind: "rss", urls: ["https://britanniapandi.com/feed/"], home: "https://britanniapandi.com/" },
   { id: "ukpandi", name: "UK P&I Club", kind: "rss", urls: [], home: "https://www.ukpandi.com/news-and-resources/" },
-  { id: "gard", name: "Gard", kind: "rss", urls: [], home: "https://www.gard.no/insights/" },
-  { id: "northstandard", name: "NorthStandard", kind: "rss", urls: [], home: "https://north-standard.com/insights-and-resources" },
-  { id: "steamship", name: "Steamship Mutual", kind: "rss", urls: [], home: "https://www.steamshipmutual.com/" },
-  { id: "safety4sea", name: "SAFETY4SEA", kind: "rss", urls: ["https://safety4sea.com/feed/"] },
   { id: "splash", name: "Splash247", kind: "rss", urls: ["https://splash247.com/feed/"] },
   { id: "gcaptain", name: "gCaptain", kind: "rss", urls: ["https://gcaptain.com/feed/"] },
   { id: "marineinsight", name: "Marine Insight", kind: "rss", urls: ["https://www.marineinsight.com/feed/"] },
   { id: "maritimeexecutive", name: "The Maritime Executive", kind: "rss", urls: ["https://maritime-executive.com/articles.rss"], home: "https://maritime-executive.com/" },
   { id: "hellenic", name: "Hellenic Shipping News", kind: "rss", urls: ["https://www.hellenicshippingnews.com/feed/"] },
+  { id: "offshoreenergy", name: "Offshore Energy", kind: "rss", urls: ["https://www.offshore-energy.biz/feed/"], home: "https://www.offshore-energy.biz/" },
+  { id: "seatrade", name: "Seatrade Maritime", kind: "rss", urls: ["https://www.seatrade-maritime.com/rss.xml"], home: "https://www.seatrade-maritime.com/" },
 ]
+// Dropped after a week of failures (Oct 2026): US Coast Guard and NorthStandard turn automated readers away (403);
+// Paris MoU, OCIMF, AMSA, Gard and Steamship Mutual publish no feed we can read; SAFETY4SEA's feed came back empty.
 const SOURCE = new Map(SOURCES.map((s) => [s.id, s]))
 export const KINDS = ["detention", "alert", "accident", "rule", "sire", "industry"]
 const KEEP_DAYS = 14 // older items aren't news any more

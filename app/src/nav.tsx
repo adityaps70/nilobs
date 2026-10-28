@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 
 export type AppScreen =
   | "today" | "stories" | "setup" | "loading" | "brief" | "practice" | "drill" | "bank" | "share" | "wallet"
-  | "train" | "session" | "spot" | "radar" | "kit" | "me" | "ask" | "photo" | "live" | "daily" | "pulse" | "league" | "crew" | "cert"
+  | "train" | "session" | "spot" | "radar" | "kit" | "me" | "ask" | "photo" | "live" | "daily" | "pulse" | "league" | "crew" | "cert" | "closeout"
 
 interface Intent {
   official?: boolean

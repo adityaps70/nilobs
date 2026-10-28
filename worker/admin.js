@@ -8,6 +8,7 @@
 // shared debriefs it shows only the de-identified version others see.
 import { ensureSchema, getSession } from "./auth.js"
 import { ensureWalletSchema } from "./wallet.js"
+import { SUB_ON, ensureSubsSchema } from "./subs.js"
 import { limited, originAllowed, reply } from "./guard.js"
 import { ensureLiveSchema } from "./live.js"
 import { ensureCrewSchema } from "./crews.js"
@@ -102,6 +103,7 @@ export function featureOf(label) {
   if (/^AI inspector/.test(l)) return "AI inspector"
   if (/^Mock interview/.test(l)) return "Mock interview"
   if (/^Explain an observation/.test(l)) return "Explain an observation"
+  if (/^Close-out helper/.test(l)) return "Close-out helper"
   if (/^Photo check/.test(l)) return "Photo check"
   if (/^Inspection brief/.test(l)) return "Inspection brief"
   if (/^A new prep plan/.test(l)) return "Prep plan"
@@ -139,6 +141,9 @@ export async function computeStats(db, now = Date.now()) {
     all(`SELECT id, user_id, provider, product, currency, amount, status, created_at, paid_at FROM payments ORDER BY created_at DESC LIMIT ${MAX_ROWS}`),
     db.prepare("SELECT COUNT(*) AS n FROM starts").first(),
   ])
+  // auto-renewing plans that Razorpay will still charge (worker/subs.js)
+  await ensureSubsSchema(db)
+  const autoRenew = num((await db.prepare(`SELECT COUNT(*) AS n FROM subscriptions WHERE status IN (${SUB_ON.map(() => "?").join(",")})`).bind(...SUB_ON).first())?.n)
   const stateOf = new Map(states.map((r) => [r.user_id, r]))
   const walletOf = new Map(wallets.map((r) => [r.user_id, r]))
   const userOf = new Map(users.map((u) => [u.id, u]))
@@ -321,6 +326,7 @@ export async function computeStats(db, now = Date.now()) {
       paidCount,
       payers: payers.size,
       passes,
+      autoRenew,
       revenue,
       revenue30,
     },

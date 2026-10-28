@@ -73,6 +73,8 @@ export interface PlanState {
   term: number // end of the paid term: the next refill for monthly plans, 12 refills for yearly
   cancelAt: number | null
   next: { id: PlanId; cycle: Cycle } | null // a downgrade waiting for the end of the term
+  /** Auto-renew is on (a Razorpay subscription): at the end of the term the plan waits for the renewal charge. */
+  renewing?: boolean
 }
 /** A charge whose AI call is still running. Refunded automatically if it is never settled. */
 export interface Hold {
@@ -90,6 +92,8 @@ export const CYCLE_DAYS = 30
 export const YEAR_CYCLES = 12
 export const WELCOME = { credits: 60, days: 30 }
 export const EARNED_DAYS = 30
+/** With auto-renew on, how long a plan waits past its paid term for the renewal charge before it lapses. */
+export const RENEW_GRACE_DAYS = 7
 export const LEDGER_MAX = 120
 
 /* ---------------- price list ---------------- */
@@ -156,6 +160,7 @@ export const COSTS = {
   askDeep: 4, // Ask NilObs, deep answer (strong model)
   askExpert: 8, // Ask NilObs, expert answer (strong model, high effort). Command plan only
   explain: 1, // why an observation was raised + close-out draft
+  closeout: 4, // Close-out helper: your own observation → root cause, corrective and preventive action, evidence, operator comment
   photo: 3, // Photo check: per photo, what an inspector would flag and how to fix it
   interview: 8, // AI inspector: five graded questions with follow-ups and a debrief
   voiceInterview: 12, // the same, with the inspector speaking each question
@@ -284,7 +289,7 @@ export function migrate(raw: unknown, now: number): WalletState {
         const started = num(plan.started, now)
         const renews = num(plan.renews, now + CYCLE_DAYS * DAY)
         const nx = plan.next && typeof plan.next === "object" && plan.next.id in PLANS ? { id: plan.next.id, cycle: plan.next.cycle === "annual" ? ("annual" as const) : ("monthly" as const) } : null
-        return { id: planId, cycle, started, renews, term: num(plan.term, cycle === "annual" ? termFrom(started, cycle) : renews), cancelAt: plan.cancelAt == null ? null : num(plan.cancelAt, now), next: nx }
+        return { id: planId, cycle, started, renews, term: num(plan.term, cycle === "annual" ? termFrom(started, cycle) : renews), cancelAt: plan.cancelAt == null ? null : num(plan.cancelAt, now), next: nx, ...(plan.renewing === true ? { renewing: true } : {}) }
       })(),
       pass: r.pass && typeof r.pass === "object" ? { until: num((r.pass as { until?: number }).until, 0) } : null,
       usage: { ...emptyUsage(), ...Object.fromEntries(Object.entries((r.usage || {}) as Record<string, unknown>).map(([k, v]) => [k, Math.max(0, num(v))])) } as Usage,
@@ -339,6 +344,11 @@ export function tick(state: WalletState, now: number, page?: string): WalletStat
       const started = p.renews
       const renews = started + CYCLE_DAYS * DAY
       const termEnded = started >= p.term
+      // auto-renew: the paid term is over and the renewal charge hasn't arrived yet. Wait for it (no new credits,
+      // no lapse) for up to RENEW_GRACE_DAYS; the charge then extends the term from where it ended.
+      if (p.renewing && p.id !== "free" && termEnded && now < p.term + RENEW_GRACE_DAYS * DAY) {
+        break
+      }
       if (p.cancelAt != null && p.cancelAt <= started) {
         p = { id: "free", cycle: "monthly", started, renews, term: renews, cancelAt: null, next: null }
         note = "lapsed"
@@ -354,6 +364,7 @@ export function tick(state: WalletState, now: number, page?: string): WalletStat
       }
     }
     s.plan = p
+    if (!note) return s // held for a renewal charge, nothing changed
     const plan = PLANS[p.id]
     addBucket(s, "monthly", plan.credits, `${plan.name} plan: monthly credits`, p.renews, p.started)
     const label =
@@ -580,7 +591,7 @@ export function recordShare(state: WalletState, now: number, text = ""): WalletS
 export type Tier = "quick" | "default" | "complex"
 export type ItemKind =
   | "askQuick" | "askDeep" | "askExpert" | "explain" | "photo" | "interview" | "voiceInterview" | "mockInterview"
-  | "brief" | "planRedo" | "rolePack" | "listen" | "story" | "deck" | "freeze"
+  | "brief" | "planRedo" | "rolePack" | "listen" | "story" | "deck" | "freeze" | "closeout"
 export interface Item { kind: ItemKind; n?: number; id?: string | number }
 export interface AiAllowance {
   calls: number // answers this charge pays for
@@ -610,6 +621,7 @@ export const ITEMS: Record<ItemKind, ItemRule> = {
   story: { usage: "stories", refundable: false, label: () => "Unlocked an inspection story" },
   deck: { usage: "decks", refundable: false, label: (it) => `Unlocked deck: ${String(it.id)}` },
   freeze: { refundable: false, label: () => "Streak freeze" },
+  closeout: { usage: "explains", refundable: true, label: () => "Close-out helper", ai: { calls: 1, tiers: ["default"], expertTier: true, maxChars: 16000, hold: true, hours: 1 } },
 }
 /** Specialist decks and their one-time price (fleet.ts lists the same; a test keeps them in step). */
 export const PAID_DECKS: Record<string, number> = { ecdis: 40, cdi: 40, china: 40 }
@@ -724,6 +736,42 @@ export function grantPurchase(state: WalletState, key: string, cur: Currency, no
   }
   s.paid += 1
   return { ok: true, state: s }
+}
+
+/**
+ * A charge on an auto-renewing plan (a Razorpay subscription). The first charge starts the plan like a purchase;
+ * each later one extends the term from where it ended, even if the charge came a few days late (the plan waited
+ * for it, see tick), so refills stay on their 30-day rhythm and nothing is given before it's paid for.
+ * Leaves auto-renew on. If the plan can't be applied (a higher plan runs), the caller keeps the value as credits.
+ */
+export function grantRenewal(state: WalletState, key: string, cur: Currency, now: number, paidWith: string): { ok: true; state: WalletState } | { ok: false; why: string } {
+  const p = product(key)
+  if (!p || p.kind !== "plan") return { ok: false, why: "Not a plan" }
+  const s0 = tick(state, now)
+  if (s0.plan.id === p.planId && s0.plan.renewing) {
+    const s = s0
+    const plan = PLANS[p.planId!]
+    const end = paidUntil(s) ?? now
+    const term = end + termFrom(0, p.cycle!)
+    s.plan = { ...s.plan, cycle: p.cycle!, term, cancelAt: term, next: null, renewing: true }
+    log(s, { at: now, delta: 0, label: `${plan.name} renewed to ${dayOf(term)}, ${paidWith || fmtPrice(p.price[cur], cur)}`, kind: "purchase" })
+    s.paid += 1
+    // the plan may have been waiting for this charge: catch up on the refill that was held back
+    return { ok: true, state: tick(s, now) }
+  }
+  const r = grantPurchase(s0, key, cur, now, paidWith)
+  if (!r.ok) return r
+  r.state.plan = { ...r.state.plan, renewing: true }
+  return r
+}
+/** Auto-renew turned off or ended: the plan runs to the end of what's paid, then moves to Free. */
+export function stopRenewing(state: WalletState, now: number): WalletState {
+  const s = clone(state)
+  if (!s.plan.renewing) return s
+  const { renewing: _r, ...plan } = s.plan
+  void _r
+  s.plan = plan
+  return tick(s, now)
 }
 
 /* ---------------- what credits buy ---------------- */

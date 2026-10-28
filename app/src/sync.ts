@@ -12,7 +12,7 @@ export const WALLET_KEY = "sr.wallet"
 export const WALLET_ACCOUNT_KEY = "sr.wallet.acct"
 export const PROGRESS_KEY = "sr.progress"
 /** Saved screens that follow the account. Photo thumbnails, the night setting and a half-done interview stay on the device. */
-export const EXTRA_KEYS = ["sr.profile", "sr.ratings", "sr.saved", "sr.lib", "sr.brief", "sr.ask", "sr.explain", "sr.currency", "sr.streak", "sr.rolepack", "sr.league"]
+export const EXTRA_KEYS = ["sr.profile", "sr.ratings", "sr.saved", "sr.lib", "sr.brief", "sr.ask", "sr.explain", "sr.currency", "sr.streak", "sr.rolepack", "sr.league", "sr.closeouts"]
 export const MAX_EXTRA_CHARS = 80_000
 
 export type Extras = Record<string, { v: unknown; t: number }>

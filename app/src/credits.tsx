@@ -48,6 +48,10 @@ export type WalletMode = "account" | "local"
 export type CheckoutMode = "razorpay" | "simulated" | null
 export type EarnKind = "badge" | "level" | "streak" | "chest"
 export type BuyResult = { ok: true; message: string } | { ok: false; cancelled?: boolean; error?: string }
+/** An auto-renewing plan (a Razorpay subscription), as the server shows it. */
+export interface SubView { id: string; product: string; status: string; on: boolean; amount: number; currency: Currency; paidCount: number; since: number; chargedAt: number | null; endedAt: number | null }
+/** Whether plans can renew automatically here, and the account's subscription if it has one. */
+export interface AutoRenew { available: CheckoutMode; sub: SubView | null }
 
 /** One id per page load, so charges held by a page that has closed can be refunded. */
 const PAGE = Math.random().toString(36).slice(2, 10)
@@ -88,6 +92,12 @@ export interface Wallet {
   claimAll: (c: { badges: string[]; level: number; streakBest: number }) => void
   /** Buy a product ("topup:t500", "pass", "plan:watch:monthly"), through Razorpay Checkout when signed in. */
   buy: (key: string) => Promise<BuyResult>
+  /** Account mode: auto-renew (null until known, or signed out). */
+  renew: AutoRenew | null
+  /** Start a plan that renews automatically ("plan:watch:monthly"), through Razorpay Checkout. */
+  subscribe: (key: string) => Promise<BuyResult>
+  /** Turn auto-renew off. The plan runs to the end of what's paid. */
+  stopRenew: () => Promise<{ ok: boolean; error?: string }>
   unlock: (storyId: number) => boolean
   isUnlocked: (storyId: number) => boolean
   hasDeck: (id: string, cost: number) => boolean
@@ -162,15 +172,16 @@ function writeAcct(user: string, view: AcctView) {
 }
 
 /* ---------------- Razorpay Checkout ---------------- */
-type RzpPaid = { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }
+type RzpPaid = { razorpay_payment_id: string; razorpay_order_id?: string; razorpay_subscription_id?: string; razorpay_signature: string }
 type RzpOptions = {
   key: string
-  amount: number
-  currency: string
+  amount?: number
+  currency?: string
   name: string
   description: string
   image?: string
-  order_id: string
+  order_id?: string
+  subscription_id?: string
   prefill?: { name?: string; email?: string }
   theme?: { color: string }
   handler: (r: RzpPaid) => void
@@ -195,19 +206,18 @@ function loadRazorpay(): Promise<RzpCtor> {
   })
   return rzpSdk
 }
-type CheckoutOrder = { razorpayOrderId: string; keyId: string; amount: number; currency: string; description: string; prefill?: { name?: string; email?: string } }
+type CheckoutOrder = { razorpayOrderId?: string; subscriptionId?: string; keyId: string; amount: number; currency: string; description: string; prefill?: { name?: string; email?: string } }
 /** Razorpay's own pop-up (UPI, cards, netbanking, wallets). Resolves when it's paid or closed. */
 function openCheckout(Rzp: RzpCtor, o: CheckoutOrder): Promise<{ paid: RzpPaid } | { closed: true; failed?: string }> {
   return new Promise((resolve) => {
     let failed = ""
     const r = new Rzp({
       key: o.keyId,
-      amount: o.amount,
-      currency: o.currency,
+      // an order says the amount; a subscription's comes from its plan
+      ...(o.subscriptionId ? { subscription_id: o.subscriptionId } : { amount: o.amount, currency: o.currency, order_id: o.razorpayOrderId }),
       name: "NilObs",
       description: o.description,
       image: `${window.location.origin}/brand/nilobs-app-icon-192.png`,
-      order_id: o.razorpayOrderId,
       prefill: o.prefill,
       theme: { color: "#0b6bcb" },
       handler: (paid) => resolve({ paid }),
@@ -224,6 +234,20 @@ async function confirmOrder(orderId: string, tries: number, paid?: RzpPaid): Pro
   for (let i = 0; i < tries; i++) {
     try {
       const r = await walletApi<{ status: string } & Record<string, unknown>>("/api/pay/razorpay/confirm", { orderId, ...(paid ? { paymentId: paid.razorpay_payment_id, signature: paid.razorpay_signature } : {}) })
+      if (r.status === "paid") return { status: "paid", view: r }
+      if (r.status === "failed") return { status: "failed" }
+    } catch (e) {
+      if ((e as ApiErr).status === 404 || (e as ApiErr).status === 409 || (e as ApiErr).status === 400) return { status: "gone" }
+    }
+    if (i < tries - 1) await new Promise((res) => setTimeout(res, 2000))
+  }
+  return { status: "pending" }
+}
+/** The same for a subscription's first charge. */
+async function confirmSub(subscriptionId: string, tries: number, paid?: RzpPaid): Promise<Confirmed> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await walletApi<{ status: string } & Record<string, unknown>>("/api/pay/razorpay/subscription/confirm", { subscriptionId, ...(paid ? { paymentId: paid.razorpay_payment_id, signature: paid.razorpay_signature } : {}) })
       if (r.status === "paid") return { status: "paid", view: r }
       if (r.status === "failed") return { status: "failed" }
     } catch (e) {
@@ -266,6 +290,12 @@ function boughtMessage(key: string): string {
   if (p.kind === "pass") return `Your Voyage pass is active: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days} days.`
   return `${p.name} is yours. ${p.credits.toLocaleString("en-IN")} credits now, and again every 30 days while it runs.`
 }
+function renewMessage(key: string): string {
+  const p = product(key)
+  if (!p) return "Auto-renew is on."
+  const plan = PLANS[p.planId!]
+  return `${plan.name} is yours, and renews automatically: ${fmtPrice(p.price.INR, "INR")} every ${p.cycle === "annual" ? "year" : "30 days"} until you turn it off in Plans & credits. ${plan.credits.toLocaleString("en-IN")} credits now.`
+}
 
 const Ctx = createContext<Wallet | null>(null)
 
@@ -284,6 +314,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const ref = useRef<WalletState>(shown)
   const [flash, setFlash] = useState(0)
   const [sheet, setSheet] = useState<Sheet | null>(null)
+  const [renew, setRenew] = useState<AutoRenew | null>(null)
   const inflight = useRef(0)
   const acctRef = useRef(account)
   acctRef.current = account
@@ -410,6 +441,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("focus", vis)
     }
   }, [mode, account, refresh])
+
+  // Auto-renew: is it offered, and is it on? Asked once per sign-in (and after each change)
+  const loadRenew = useCallback(() => {
+    const user = acctRef.current
+    if (!user) return
+    walletApi<AutoRenew>("/api/pay/subscription")
+      .then((r) => user === acctRef.current && setRenew({ available: r.available ?? null, sub: r.sub ?? null }))
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    setRenew(null)
+    if (mode === "account") loadRenew()
+  }, [mode, account, loadRenew])
 
   // Back after the page went away mid-payment (a UPI app took over, or the tab was closed): did it go through?
   useEffect(() => {
@@ -606,6 +650,60 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           return { ok: false, error: er.code === "offline" ? er.message : er.message || "The payment couldn't start. Try again." }
         }
       },
+      renew: mode === "account" ? renew : null,
+      subscribe: async (key) => {
+        const p = product(key)
+        if (!p || p.kind !== "plan") return { ok: false, error: "Only plans renew automatically." }
+        if (!user) return { ok: false, error: "Sign in first." }
+        try {
+          const o = await walletApi<Record<string, unknown>>("/api/pay/subscribe", { product: key })
+          if (o.provider === "simulated") {
+            apply(o, user, true)
+            setRenew((r) => ({ available: r?.available ?? "simulated", sub: (o.sub as SubView) ?? null }))
+            return { ok: true, message: renewMessage(key) }
+          }
+          if (o.provider !== "razorpay" || typeof o.subscriptionId !== "string" || typeof o.keyId !== "string") return { ok: false, error: "Auto-renew isn't open yet. You can pay once instead." }
+          const subId = o.subscriptionId
+          let Rzp: RzpCtor
+          try {
+            Rzp = await loadRazorpay()
+          } catch {
+            return { ok: false, error: "Razorpay's checkout didn't load. Check your connection or ad blocker, then try again." }
+          }
+          const result = await openCheckout(Rzp, o as unknown as CheckoutOrder)
+          const r = "paid" in result ? await confirmSub(subId, 5, result.paid) : await confirmSub(subId, 2)
+          if (r.status === "paid") {
+            apply(r.view, user, true)
+            setRenew((x) => ({ available: x?.available ?? "razorpay", sub: ((r.view as { sub?: SubView })?.sub) ?? null }))
+            return { ok: true, message: renewMessage(key) }
+          }
+          // a UPI mandate approved in the phone's app can still arrive after the pop-up closes
+          setTimeout(() => {
+            refresh()
+            loadRenew()
+          }, 20000)
+          const reason = "closed" in result ? result.failed : undefined
+          if (r.status === "failed") return { ok: false, error: reason ? `${reason} Nothing was charged.` : "That payment didn't go through, so nothing was charged. Try again." }
+          if (r.status === "gone") return { ok: false, error: "That payment couldn't be verified. If money left your account, email us and we'll sort it out." }
+          if ("closed" in result) return reason ? { ok: false, error: `${reason} Nothing was charged.` } : { ok: false, cancelled: true }
+          return { ok: false, error: STILL_CONFIRMING }
+        } catch (e) {
+          const er = e as ApiErr
+          if (er.code === "subscriptions_off") setRenew((x) => ({ available: null, sub: x?.sub ?? null }))
+          return { ok: false, error: er.message || "Auto-renew couldn't start. Try again, or pay once." }
+        }
+      },
+      stopRenew: async () => {
+        if (!user) return { ok: false, error: "Sign in first." }
+        try {
+          const r = await walletApi<Record<string, unknown>>("/api/pay/subscription/cancel", {})
+          if (okView(r)) apply(r, user, false)
+          setRenew((x) => ({ available: x?.available ?? null, sub: (r.sub as SubView) ?? null }))
+          return { ok: true }
+        } catch (e) {
+          return { ok: false, error: (e as ApiErr).message || "Couldn't turn auto-renew off. Try again." }
+        }
+      },
       unlock: (id) => {
         if (isUnlocked(id)) return true
         return !!charge({ kind: "story", id })
@@ -630,7 +728,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       openTopUp: (reason, select) => setSheet({ tab: select && select.startsWith("t") ? "topup" : "plans", reason, select }),
       closePlans: () => setSheet(null),
     }
-  }, [shown, acct, ready, mode, account, flash, sheet, currency, setCurrency, commit, apply, refresh])
+  }, [shown, acct, ready, mode, account, flash, sheet, currency, setCurrency, commit, apply, refresh, renew, loadRenew])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

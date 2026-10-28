@@ -327,7 +327,7 @@ const FAQ: [string, string][] = [
   ["Do credits expire?", `Plan credits refill every 30 days and don't roll over, so use them. Welcome credits last ${WELCOME.days} days, credits you earn in the app last ${EARNED_DAYS} days, and top-ups never expire. NilObs always spends the credits that expire soonest first.`],
   ["What happens when I run out?", "Learning carries on as normal: flashcards, the game, the radar and the ready kit are always free. AI features pause until your plan refills, you earn more, or you top up. Nothing is ever charged automatically."],
   ["I'm at sea for months. Do I need a subscription?", `No. The ${PASS.name} is a one-off: ${PASS.credits.toLocaleString("en-IN")} credits and Watchkeeper perks for ${PASS.days / 30} months, and nothing renews. Download what you need while you have signal.`],
-  ["Does a plan renew by itself?", "No. You pay for a month or a year up front, and it simply ends then: you move to Free unless you buy more time. There's nothing to cancel. Your XP, level, streak and saved work stay."],
+  ["Does a plan renew by itself?", "Only if you choose. You pay for a month or a year up front, and by default it simply ends: you move to Free unless you buy more time, with nothing to cancel. If you'd rather not think about it, pick \"Renew automatically\" (UPI Autopay or card, in rupees) and turn it off any time in Plans & credits. Your XP, level, streak and saved work always stay."],
 ]
 
 export function Pricing() {
@@ -458,7 +458,7 @@ export function Pricing() {
           ))}
         </div>
         <p className="text-[12.5px] leading-relaxed text-mute">
-          {HOSTED ? "Pay through Razorpay with UPI, cards, netbanking or wallets once you've signed in. Plans don't renew by themselves." : "Prototype: checkout is simulated and no payment is taken."}{" "}
+          {HOSTED ? "Pay through Razorpay with UPI, cards, netbanking or wallets once you've signed in. Plans don't renew unless you turn on auto-renew." : "Prototype: checkout is simulated and no payment is taken."}{" "}
           {cur === "INR" ? "No GST is added: the price shown is what you pay." : "Dollar prices exclude any local taxes where you are."} Ship managers can buy seats for a whole crew: a fleet plan is {fmtPrice(FLEET.price[cur].monthly, cur)} a seat a month, from {FLEET.min} seats.
           {HOSTED && <> <a href="/terms" className="underline underline-offset-2">Terms</a> · <a href="/refunds" className="underline underline-offset-2">Refunds</a></>}
         </p>

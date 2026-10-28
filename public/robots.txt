@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/
+Disallow: /receipt/
+Disallow: /join/
+
+Sitemap: https://nilobs.com/sitemap.xml

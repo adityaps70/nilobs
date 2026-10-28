@@ -87,3 +87,54 @@ test("the server's badge list matches the app's badges", () => {
   const ids = [...block[1].matchAll(/\{ id: "([a-z0-9]+)"/g)].map((m) => m[1])
   assert.deepEqual([...ids].sort(), [...E.BADGE_IDS].sort())
 })
+
+test("auto-renew: each charge extends the term from where it ended; no credits before the charge, a 7-day wait at most", () => {
+  const bal = (s, t) => E.balance(s, t)
+  // first charge: starts Watchkeeper like a purchase, with auto-renew on
+  let r = E.grantRenewal(E.fresh(T0), "plan:watch:monthly", "INR", T0, "₹499 via Razorpay (auto-renew)")
+  assert.equal(r.ok, true)
+  let s = r.state
+  assert.equal(s.plan.id, "watch")
+  assert.equal(s.plan.renewing, true)
+  assert.equal(s.plan.term, T0 + 30 * D)
+  const afterFirst = bal(s, T0)
+  // the term ends and the charge hasn't come yet: the plan waits, with no new credits and no lapse
+  s = E.tick(s, T0 + 30 * D + 3600000)
+  assert.equal(s.plan.id, "watch", "still Watchkeeper while the renewal is due")
+  assert.equal(s.ledger.filter((e) => /this month's 400/.test(e.label)).length, 0, "no refill before the charge")
+  // the charge arrives a day late: the term runs from where it ended, and the held refill arrives now
+  r = E.grantRenewal(s, "plan:watch:monthly", "INR", T0 + 31 * D, "₹499 via Razorpay (auto-renew)")
+  s = r.state
+  assert.equal(s.plan.term, T0 + 60 * D, "no drift: extended from the old end, not from the late charge")
+  assert.equal(s.plan.renews, T0 + 60 * D)
+  assert.equal(s.ledger.filter((e) => /this month's 400/.test(e.label)).length, 1)
+  assert.ok(bal(s, T0 + 31 * D) >= 400 && afterFirst >= 400)
+  // a charge that comes early (before the term ends) just extends
+  s = E.grantRenewal(s, "plan:watch:monthly", "INR", T0 + 59 * D, "").state
+  assert.equal(s.plan.term, T0 + 90 * D)
+  // a charge that never comes: after 7 days' wait the plan lapses to Free
+  const lapsed = E.tick(s, T0 + 98 * D)
+  assert.equal(lapsed.plan.id, "free")
+  // turning auto-renew off: the plan runs to the end of what's paid, then Free (no wait)
+  let off = E.stopRenewing(s, T0 + 60 * D)
+  assert.equal(off.plan.renewing, undefined)
+  assert.equal(E.tick(off, T0 + 89 * D).plan.id, "watch")
+  assert.equal(E.tick(off, T0 + 90 * D + 1000).plan.id, "free")
+  // stopping during the wait: lapses straight away
+  off = E.stopRenewing(E.tick(s, T0 + 92 * D), T0 + 92 * D)
+  assert.equal(off.plan.id, "free")
+  // the flag survives storage
+  assert.equal(E.migrate(JSON.parse(JSON.stringify(s)), T0 + 61 * D).plan.renewing, true)
+})
+
+test("auto-renew yearly: twelve refills a term, the next year's charge extends it", () => {
+  let s = E.grantRenewal(E.fresh(T0), "plan:command:annual", "INR", T0, "").state
+  assert.equal(s.plan.term, T0 + 360 * D)
+  for (let d = 1; d <= 362; d++) s = E.tick(s, T0 + d * D)
+  assert.equal(s.plan.id, "command")
+  const refills = s.ledger.filter((e) => /this month's 1500/.test(e.label)).length
+  assert.equal(refills, 11, "eleven refills after the first month, none for the unpaid 13th")
+  s = E.grantRenewal(s, "plan:command:annual", "INR", T0 + 365 * D, "").state
+  assert.equal(s.plan.term, T0 + 720 * D)
+  assert.equal(s.ledger.filter((e) => /this month's 1500/.test(e.label)).length, 12)
+})

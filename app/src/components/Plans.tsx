@@ -1,6 +1,7 @@
 // Plans, top-ups and the wallet screen.
 // Signed in on nilobs.com, purchases are real: paid through Razorpay and confirmed by the server.
-// Plans are prepaid and don't renew by themselves. Elsewhere (a local test build) checkout is simulated.
+// Plans are prepaid and don't renew by themselves, unless the buyer picks "Renew automatically" (a Razorpay
+// subscription, rupees only; never the default). Elsewhere (a local test build) checkout is simulated.
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { HOSTED } from "@/ai"
 import { useAuth } from "@/auth"
@@ -97,6 +98,7 @@ export function PlansSheet() {
   const [stage, setStage] = useState<"pick" | "pay" | "done">("pick")
   const [done, setDone] = useState("")
   const [err, setErr] = useState("")
+  const [auto, setAuto] = useState(false)
   const auth = useAuth()
   const btn = useRef<HTMLButtonElement>(null)
   // each purchase gets a token; closing the sheet or starting another purchase cancels the older one
@@ -108,6 +110,7 @@ export function PlansSheet() {
     setStage(w.sheet.done ? "done" : "pick")
     setDone(w.sheet.done || "")
     setErr("")
+    setAuto(false)
     token.current++
     setCycle(w.sheet.cycle ?? (w.plan.id === "free" ? "monthly" : w.state.plan.cycle))
     const sel = w.sheet.select
@@ -132,7 +135,11 @@ export function PlansSheet() {
   }
   const now = Date.now()
   const key = pick.kind === "plan" ? productKey("plan", pick.id, cycle) : pick.kind === "pass" ? "pass" : productKey("topup", pick.id)
-  const can = canBuy(w.state, key, now)
+  const renewOn = w.renew?.sub?.on ? w.renew.sub : null
+  const renewPlan = renewOn ? (renewOn.product.split(":")[1] as PlanId) : null
+  const can0 = canBuy(w.state, key, now)
+  // another plan while auto-renew is on would be charged twice: the server refuses it too
+  const can: typeof can0 = can0.ok && pick.kind === "plan" && renewPlan && renewPlan !== pick.id ? { ok: false, why: `Auto-renew is on for ${PLANS[renewPlan].name}. Turn it off in Plans & credits first, then change plan.` } : can0
   const fmtD = (t: number) => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
   const length = (cycle === "annual" ? YEAR_CYCLES : 1) * CYCLE_DAYS * DAY
   const until = paidUntil(w.state)
@@ -156,6 +163,13 @@ export function PlansSheet() {
       : HOSTED && auth.status === "out" ? "signin"
       : HOSTED && auth.status === "loading" ? "loading"
       : "practice"
+  // auto-renew is offered for plans paid in rupees, when Razorpay has it switched on and none is running
+  const canAuto = pick.kind === "plan" && cur === "INR" && (via === "razorpay" || via === "simulated") && !!w.renew?.available && !renewOn
+  const autoOn = auto && canAuto
+  const every = cycle === "annual" ? "year" : "30 days"
+  const effectNow = autoOn && can.ok && pick.kind === "plan"
+    ? `Starts today with ${PLANS[pick.id].credits.toLocaleString("en-IN")} credits. ${fmtPrice(amount, cur)} is charged every ${every} until you turn it off in Plans & credits (Razorpay tells you before each charge). Turning it off keeps what you've paid for.${upgrade && unusedMonths ? ` Your ${unusedMonths === 1 ? "month" : `${unusedMonths} months`} of ${w.plan.name} still to come ${unusedMonths === 1 ? "becomes" : "become"} credits that don't expire.` : ""}`
+    : effect
   const pay = async () => {
     if (stage === "pay" || !can.ok || via === "closed" || via === "loading") return
     if (via === "signin") {
@@ -169,7 +183,7 @@ export function PlansSheet() {
       await new Promise((r) => setTimeout(r, 900))
       if (my !== token.current) return // closed while "processing": nothing is bought
     }
-    const r = await w.buy(key)
+    const r = autoOn ? await w.subscribe(key) : await w.buy(key)
     if (my !== token.current) return // the sheet was closed meanwhile (what was bought is still in the wallet)
     if (r.ok) {
       setDone(r.message)
@@ -198,7 +212,7 @@ export function PlansSheet() {
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 40, opacity: 0 }}
             transition={{ type: "spring", stiffness: 380, damping: 34 }}
-            className="no-scrollbar relative m-0 flex max-h-[92dvh] w-full max-w-[480px] flex-col gap-3.5 overflow-y-auto rounded-t-[28px] border border-line sheet-panel p-5 pb-[max(20px,env(safe-area-inset-bottom))] font-sans text-ink shadow-2xl sm:m-4 sm:rounded-[28px]"
+            className="no-scrollbar relative m-0 flex max-h-[92dvh] w-full max-w-[480px] flex-col gap-3.5 overflow-y-auto [&>*]:shrink-0 rounded-t-[28px] border border-line sheet-panel p-5 pb-[max(20px,env(safe-area-inset-bottom))] font-sans text-ink shadow-2xl sm:m-4 sm:rounded-[28px]"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex flex-col gap-1">
@@ -275,6 +289,19 @@ export function PlansSheet() {
                         </span>
                       </button>
                     </div>
+                    {canAuto && (
+                      <div role="radiogroup" aria-label="How to pay" className="grid grid-cols-2 gap-2">
+                        {([false, true] as const).map((a) => (
+                          <button key={String(a)} type="button" role="radio" aria-checked={auto === a} onClick={() => setAuto(a)} className={cn("flex flex-col gap-0.5 rounded-2xl border p-3 text-left", auto === a ? "border-primary bg-surface-2" : "border-line hover:border-mute")}>
+                            <span className="flex items-center gap-1.5 text-[13.5px] font-bold">{a ? <I.Refresh size={14} /> : <I.Check size={14} />}{a ? "Renew automatically" : "Pay once"}</span>
+                            <span className="text-[11.5px] leading-snug text-mute">{a ? `${fmtPrice(amount, cur)} every ${every}. Turn it off any time.` : `${fmtPrice(amount, cur)} for ${cycle === "annual" ? "a year" : "a month"}. Nothing renews.`}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {renewOn && pick.kind === "plan" && renewPlan === pick.id && (
+                      <p className="text-[12px] leading-snug text-mute">Auto-renew is on for {PLANS[renewPlan].name} ({fmtPrice(renewOn.amount, renewOn.currency)} every {renewOn.product.endsWith(":annual") ? "year" : "30 days"}). Paying once now adds time on top.</p>
+                    )}
                   </>
                 ) : (
                   <div role="radiogroup" aria-label="Top-ups" className="flex flex-col gap-2">
@@ -309,10 +336,10 @@ export function PlansSheet() {
                   ) : via === "signin" ? (
                     "Sign in to buy"
                   ) : (
-                    <>{pick.kind === "plan" ? (sameRank ? `Add ${cycle === "annual" ? "a year" : "a month"}` : upgrade ? `Upgrade to ${PLANS[pick.id].name}` : `Get ${PLANS[pick.id].name}`) : pick.kind === "pass" ? "Get the Voyage pass" : "Buy credits"} · {fmtPrice(amount, cur)}</>
+                    autoOn && pick.kind === "plan" ? <>{`${upgrade ? "Upgrade to" : "Get"} ${PLANS[pick.id].name}`} · {fmtPrice(amount, cur)} every {every}</> : <>{pick.kind === "plan" ? (sameRank ? `Add ${cycle === "annual" ? "a year" : "a month"}` : upgrade ? `Upgrade to ${PLANS[pick.id].name}` : `Get ${PLANS[pick.id].name}`) : pick.kind === "pass" ? "Get the Voyage pass" : "Buy credits"} · {fmtPrice(amount, cur)}</>
                   )}
                 </button>
-                {effect && <p className="-mt-1 text-center text-[12.5px] leading-snug font-medium text-ink">{effect}</p>}
+                {effectNow && <p className="-mt-1 text-center text-[12.5px] leading-snug font-medium text-ink">{effectNow}</p>}
                 {err && <p role="alert" className="-mt-1 text-center text-[12.5px] leading-snug font-medium text-signal-ink">{err}</p>}
                 {via === "closed" && w.checkout?.[other] && (
                   <button type="button" onClick={() => w.setCurrency(other)} className="-mt-1 self-center text-[12.5px] font-semibold text-primary underline underline-offset-2">Pay in {other === "INR" ? "rupees (₹)" : "dollars ($)"} instead</button>
@@ -322,7 +349,7 @@ export function PlansSheet() {
                     : via === "simulated" ? `Test mode: no payment is taken (${what}). `
                     : via === "practice" ? `Prototype: no payment is taken (${what}). `
                     : ""}
-                  {pick.kind === "plan" ? "Plans are paid up front and don't renew by themselves. " : ""}
+                  {pick.kind === "plan" ? (autoOn ? "Auto-renew uses a UPI Autopay or card mandate you approve in Razorpay; you can cancel it any time. " : "Paid once, plans don't renew by themselves. ") : ""}
                   {cur === "INR" ? "No GST is added: the price shown is what you pay." : ""}
                   {HOSTED && via === "razorpay" && <> By paying you agree to the <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a> and <a href="/refunds" target="_blank" rel="noopener" className="underline">refund policy</a>.</>}
                 </p>
@@ -353,6 +380,7 @@ export const COST_ROWS: { label: string; sub: string; cost: number; icon: (p: { 
   { label: "Ask NilObs, quick", sub: "A short answer with sources", cost: COSTS.askQuick, icon: I.Sparkle, color: "violet", screen: "ask" },
   { label: "Ask NilObs, deep", sub: "A fuller answer from the strongest model", cost: COSTS.askDeep, icon: I.Sparkle, color: "indigo", screen: "ask" },
   { label: "Why it was raised + close-out", sub: "Root cause, fix and a close-out you can copy", cost: COSTS.explain, icon: I.FileText, color: "teal", screen: "radar" },
+  { label: "Close-out helper", sub: "Your own observation: root cause, actions, evidence and an operator's comment", cost: COSTS.closeout, icon: I.FileCheck, color: "teal", screen: "closeout" },
   { label: "Photo check", sub: "Per photo: what an inspector would flag and how to fix it", cost: COSTS.photo, icon: I.Camera, color: "sky", screen: "photo" },
   { label: "AI inspector interview", sub: "Five graded questions, follow-ups and a debrief", cost: COSTS.interview, icon: I.Mic, color: "orange", screen: "practice" },
   { label: "Voice interview", sub: "The inspector speaks each question. No extra cost on plans", cost: COSTS.voiceInterview, icon: I.Volume, color: "rose", screen: "practice" },
@@ -363,12 +391,50 @@ export const COST_ROWS: { label: string; sub: string; cost: number; icon: (p: { 
   { label: "Streak freeze", sub: "Protects your streak for one missed day", cost: COSTS.freeze, icon: I.Snow, color: "slate", screen: "me" },
 ]
 
+/** Auto-renew is on: what's charged, the state of the last renewal, and the way to turn it off (asked twice). */
+function AutoRenewCard({ until }: { until: number }) {
+  const w = useWallet()
+  const sub = w.renew?.sub
+  const [ask, setAsk] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState("")
+  const off = async () => {
+    setBusy(true)
+    setMsg("")
+    const r = await w.stopRenew()
+    setBusy(false)
+    setAsk(false)
+    setMsg(r.ok ? `Auto-renew is off. Your plan stays until ${fmtDay(until)}, then you move to Free.` : r.error || "Couldn't turn it off. Try again.")
+  }
+  if (!sub?.on) return msg ? <p role="status" className="rounded-xl bg-surface-2 px-3.5 py-3 text-[12.5px] leading-snug font-medium">{msg}</p> : null
+  return (
+    <div className="flex flex-col gap-2 rounded-xl bg-surface-2 px-3.5 py-3" aria-label="Auto-renew">
+      <span className="flex items-center gap-1.5 text-[13px] font-semibold"><I.Refresh size={14} className="text-sea" /> Auto-renew is on</span>
+      <span className="text-[12.5px] leading-snug text-mute">
+        {fmtPrice(sub.amount, sub.currency)} every {sub.product.endsWith(":annual") ? "year" : "30 days"} through Razorpay{sub.chargedAt ? `, last charged ${fmtDay(sub.chargedAt)}` : ""}. Razorpay tells you before each charge.
+        {sub.status === "pending" ? " The last renewal didn't go through; Razorpay will try again. Check your UPI app or card." : ""}
+      </span>
+      {ask ? (
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-[12.5px] font-medium">Turn it off? Your plan stays until {fmtDay(until)}.</span>
+          <button type="button" disabled={busy} onClick={off} className="h-9 rounded-full bg-signal px-3.5 text-[12.5px] font-semibold text-white disabled:opacity-60">{busy ? "Turning off…" : "Yes, turn it off"}</button>
+          <button type="button" disabled={busy} onClick={() => setAsk(false)} className="h-9 rounded-full border border-line px-3.5 text-[12.5px] font-semibold">Keep it</button>
+        </span>
+      ) : (
+        <button type="button" onClick={() => setAsk(true)} className="self-start text-[12.5px] font-semibold text-primary underline underline-offset-2">Turn off auto-renew</button>
+      )}
+      {msg && <span role="status" className="text-[12.5px] leading-snug font-medium">{msg}</span>}
+    </div>
+  )
+}
+
 export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
   const w = useWallet()
   const p = useProgress()
   const plan = w.state.plan
   const planEnd = paidUntilOf(w.state)
   const paidUntil = w.state.pass ? fmtDay(w.state.pass.until) : null
+  const sub = w.renew?.sub?.on ? w.renew.sub : null
   return (
     <>
       <TopBar title="Plans & credits" onBack={() => go("today")} />
@@ -414,7 +480,9 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
           <span className="text-[13px] leading-snug text-mute">
             {w.plan.id === "free"
               ? `${PLANS.free.credits} free credits arrive on ${fmtDay(plan.renews)}.`
-              : `Paid up to ${fmtDay(planEnd ?? plan.term)}. ${plan.renews < (planEnd ?? plan.term) ? `${w.plan.credits.toLocaleString("en-IN")} credits refill on ${fmtDay(plan.renews)}. ` : ""}It doesn't renew by itself; then you move to Free.`}
+              : sub || plan.renewing
+                ? `Paid up to ${fmtDay(planEnd ?? plan.term)}, and renews automatically${sub ? `: ${fmtPrice(sub.amount, sub.currency)} every ${sub.product.endsWith(":annual") ? "year" : "30 days"} through Razorpay` : ""}. ${plan.renews < (planEnd ?? plan.term) ? `${w.plan.credits.toLocaleString("en-IN")} credits refill on ${fmtDay(plan.renews)}.` : `The next ${w.plan.credits.toLocaleString("en-IN")} credits come with the renewal.`}`
+                : `Paid up to ${fmtDay(planEnd ?? plan.term)}. ${plan.renews < (planEnd ?? plan.term) ? `${w.plan.credits.toLocaleString("en-IN")} credits refill on ${fmtDay(plan.renews)}. ` : ""}It doesn't renew by itself; then you move to Free.`}
             {paidUntil ? ` Voyage pass active until ${paidUntil}.` : ""}
           </span>
           <ul className="flex flex-col gap-1.5">
@@ -422,7 +490,8 @@ export function WalletScreen({ go }: { go: (s: AppScreen) => void }) {
               <li key={x} className="flex gap-2 text-[13px] leading-snug"><I.Check size={15} className="mt-0.5 shrink-0 text-sea" />{x}</li>
             ))}
           </ul>
-          {w.plan.id !== "free" && (
+          {w.plan.id !== "free" && <AutoRenewCard until={planEnd ?? plan.term} />}
+          {w.plan.id !== "free" && !sub && (
             <button type="button" onClick={() => w.openPlans({ tab: "plans", select: w.plan.id, cycle: plan.cycle })} className="self-start text-[12.5px] font-semibold text-primary">Add more time to {w.plan.name}</button>
           )}
         </section>

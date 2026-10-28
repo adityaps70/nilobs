@@ -150,4 +150,27 @@ if (hosted) {
   fs.writeFileSync(adminOut, `// Built from app/admin/admin.html by app/build.mjs --hosted. Edit that file, not this one.\nexport default ${JSON.stringify(admin)}\n`)
   console.log("ok admin", adminOut, (fs.statSync(adminOut).size / 1024).toFixed(0) + "KB")
 }
+if (hosted) {
+  // Public topic pages for search engines (app/seo/pages.ts), plus robots.txt and sitemap.xml
+  const seo = await esbuild.build({
+    entryPoints: [path.join(here, "seo/pages.ts")],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+    target: ["node18"],
+    nodePaths: [path.join(here, "node_modules"), ...(extraNodePath ? [extraNodePath] : [])],
+    logLevel: "warning",
+  })
+  const mod = await import("data:text/javascript;base64," + Buffer.from(seo.outputFiles[0].text).toString("base64"))
+  const pub = path.join(here, "..", "public")
+  fs.rmSync(path.join(pub, "sire"), { recursive: true, force: true })
+  const pages = mod.buildPages(SITE)
+  for (const pg of pages) {
+    const file = path.join(pub, pg.path.replace(/^\//, ""))
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, pg.body)
+  }
+  console.log("ok seo", pages.length, "files (public/sire, sitemap.xml, robots.txt)")
+}
 console.log("ok", hosted ? "hosted" : "artifact", out, (fs.statSync(out).size / 1024).toFixed(0) + "KB")

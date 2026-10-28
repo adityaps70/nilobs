@@ -22,6 +22,7 @@ import { ensureLiveSchema } from "./live.js"
 import { emailReady, sendEmail } from "./email.js"
 import { crewsOnDelete } from "./crews.js"
 import { ensureCertSchema } from "./certs.js"
+import { cancelSubsOf } from "./subs.js"
 
 const GOOGLE_CERTS = "https://www.googleapis.com/oauth2/v3/certs"
 const ISSUERS = ["accounts.google.com", "https://accounts.google.com"]
@@ -211,6 +212,8 @@ export async function handleAuth(request, env, fetchImpl = fetch) {
     await ensureWalletSchema(env.DB)
     await ensureLiveSchema(env.DB)
     await ensureCertSchema(env.DB)
+    // auto-renew stops before the account goes, so nothing is charged afterwards
+    await cancelSubsOf(env, s.user.id)
     const crewSteps = await crewsOnDelete(env.DB, s.user.id, now)
     const row = await env.DB.prepare("SELECT google_sub FROM users WHERE id = ?").bind(s.user.id).first()
     await env.DB.batch([

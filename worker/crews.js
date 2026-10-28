@@ -87,7 +87,7 @@ async function seatsUsed(db, crewId, now) {
 export async function assignSeats(db, crewId, now = Date.now()) {
   const c = await db.prepare("SELECT seats, paid_until FROM crews WHERE id = ?").bind(crewId).first()
   if (!c || !isActive(c, now)) return 0
-  const rows = (await db.prepare("SELECT user_id, seat_until, left_at FROM crew_members WHERE crew_id = ? ORDER BY joined_at, user_id").bind(crewId).all()).results || []
+  const rows = (await db.prepare("SELECT user_id, seat_until, left_at FROM crew_members WHERE crew_id = ? ORDER BY joined_at, rowid").bind(crewId).all()).results || []
   const keepers = rows.filter((r) => r.left_at != null && r.seat_until > now).length
   let free = c.seats - keepers
   const give = []
@@ -188,7 +188,7 @@ const MEMBER_ROWS = `SELECT m.user_id, m.joined_at, m.seat_until, u.name, u.emai
   json_extract(s.data, '$.extras."sr.league".v') AS league, json_extract(s.data, '$.progress.topic') AS topic,
   json_extract(s.data, '$.progress.interviews') AS interviews
   FROM crew_members m JOIN users u ON u.id = m.user_id LEFT JOIN user_state s ON s.user_id = m.user_id
-  WHERE m.crew_id = ? AND m.left_at IS NULL ORDER BY m.joined_at LIMIT ${MAX_MEMBERS}`
+  WHERE m.crew_id = ? AND m.left_at IS NULL ORDER BY m.joined_at, m.rowid LIMIT ${MAX_MEMBERS}`
 
 function weekXp(days, wk) {
   const d = obj(parse(days, {}))

@@ -328,6 +328,7 @@ export function Footer() {
             <a className="font-semibold text-ink underline underline-offset-2" href="/terms">Terms</a>
             <a className="font-semibold text-ink underline underline-offset-2" href="/refunds">Refunds</a>
             <a className="font-semibold text-ink underline underline-offset-2" href="/about">About</a>
+            <a className="font-semibold text-ink underline underline-offset-2" href="/sire/">SIRE 2.0 topics</a>
           </p>
         )}
       </div>

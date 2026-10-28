@@ -426,7 +426,7 @@ th button[aria-sort] { color: var(--ink); }
       tile("Active this week", n(T.active7), n(T.active1) + " today · " + n(T.active30) + " in 30 days"),
       tile("Came back this week", n(T.returning7), "signed up more than a week ago"),
       tile("Revenue, 30 days", moneyList(T.revenue30), "All time: " + moneyList(T.revenue)),
-      tile("Paying people", n(T.payers), plural(T.paidCount, "payment") + " · " + plural(T.passes, "active pass", "active passes")),
+      tile("Paying people", n(T.payers), plural(T.paidCount, "payment") + " · " + plural(T.passes, "active pass", "active passes") + " · " + n(T.autoRenew || 0) + " on auto-renew"),
       tile("Credits spent, 30 days", n(T.creditsSpent30), n(T.creditsHeld) + " held in wallets"),
       T.deleted ? tile("Accounts deleted", n(T.deleted), "all time") : null))
 
