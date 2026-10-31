@@ -56,6 +56,8 @@ People sign in with Google, or with a **6-digit code sent by email** (`worker/au
 - **Gate:** with `GOOGLE_CLIENT_ID` and `DB` set, `/api/ai` and `/api/voice` answer 401 to signed-out visitors. Without them, sign-in is simply off and the AI is open (how local tests run).
 - **Delete:** Profile & progress → Delete account erases the user, sessions, state, wallet, reminders, shared debriefs, crew memberships and certificate (crews they own close). Payment records stay (no name or email), and a one-way hash of the Google ID is kept in `starts` so a new account with the same Google login doesn't get the free starting credits again. Pages: `public/privacy.html`, `public/terms.html`, `public/refunds.html` (served at `/privacy`, `/terms`, `/refunds`).
 
+Links opened from Facebook, Instagram, LinkedIn and similar apps load in the app's own built-in browser, where Google doesn't allow "Sign in with Google" (people see "Access blocked: Authorization Error"). There the sign-in screen asks people to open NilObs in Safari or Chrome instead, with a button that does it where the phone allows (a Chrome intent on Android, Safari's `x-safari-https` link on iPhone), a link to copy and a "Try Google here anyway" fallback (`app/src/inapp.ts`). Sign-in by emailed code works in those browsers, so setting up email sign-in helps here too.
+
 ## The wallet on the server
 
 Signed in, the browser never decides a balance. `worker/wallet.js` keeps each account's wallet in D1 (one row with a version number; concurrent changes retry on the latest copy) and applies the same rules as the app (`app/src/economy.ts`):

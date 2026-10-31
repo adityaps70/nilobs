@@ -14,6 +14,7 @@ import { AnimatePresence, motion } from "motion/react"
 import { EXTRA_KEYS, MAX_EXTRA_CHARS, PROGRESS_KEY, WALLET_ACCOUNT_KEY, WALLET_KEY, mergeAll, type Extras, type Synced } from "@/sync"
 import { cn } from "@/lib/utils"
 import { PLANS, WELCOME } from "@/economy"
+import { browserName, inAppBrowser, openOutside } from "@/inapp"
 
 declare const __AI_ENDPOINT__: string
 const ON_SITE = typeof __AI_ENDPOINT__ !== "undefined" && !!__AI_ENDPOINT__
@@ -694,11 +695,46 @@ export function EmailSignIn({ className }: { className?: string }) {
 }
 
 /** Every way in: Google's button, and an emailed code when that's set up. */
+/**
+ * Opened inside Facebook's, Instagram's or LinkedIn's own browser: Google won't sign anyone in there, so say so and
+ * offer the way out (open in Safari or Chrome, or copy the link). "Try Google here anyway" keeps the button reachable.
+ */
+function InAppNotice({ onTry }: { onTry: () => void }) {
+  const where = typeof navigator === "undefined" ? null : inAppBrowser(navigator.userAgent)
+  const [copied, setCopied] = useState(false)
+  if (!where) return null
+  const href = typeof location === "undefined" ? "https://nilobs.com/" : location.href
+  const open = openOutside(href, where.os)
+  const name = browserName(where.os)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(href)
+      setCopied(true)
+    } catch {
+      window.prompt("Copy this link and open it in your browser:", href)
+    }
+  }
+  return (
+    <section aria-label="Open in your browser to sign in" className="flex flex-col gap-2.5 rounded-2xl border border-[#f3c9a8] bg-[#fff4ea] p-3.5 text-[13px] leading-snug text-ink">
+      <span className="text-[14px] font-bold">Open NilObs in {name} to sign in</span>
+      <span className="text-mute">Google doesn't allow signing in inside {where.app === "this app" ? "an app's" : `${where.app}'s`} built-in browser. Open this page in {name} and sign in there: it takes a second, and you'll land in the same place.</span>
+      <span className="flex flex-wrap gap-2">
+        {open && <a href={open} className="inline-flex h-11 items-center rounded-full bg-primary px-4 text-[13.5px] font-semibold text-on-primary no-underline">Open in {name}</a>}
+        <button type="button" onClick={copy} className="h-11 rounded-full border border-line bg-surface px-4 text-[13.5px] font-semibold text-ink">{copied ? "Link copied" : "Copy link"}</button>
+      </span>
+      <span className="text-[12px] text-mute">{where.os === "ios" ? "Or tap ••• at the top right, then Open in browser (or Open in Safari)." : "Or tap ⋮ at the top right, then Open in Chrome (or Open in browser)."}</span>
+      <button type="button" onClick={onTry} className="self-start text-[12px] font-semibold text-mute underline underline-offset-2">Try Google here anyway</button>
+    </section>
+  )
+}
+
 export function SignInOptions({ className }: { className?: string }) {
   const { emailOn } = useAuth()
+  const [tryHere, setTryHere] = useState(false)
+  const inApp = typeof navigator !== "undefined" && !!inAppBrowser(navigator.userAgent)
   return (
     <div className={cn("flex flex-col gap-2.5", className)}>
-      <GoogleButton />
+      {inApp && !tryHere ? <InAppNotice onTry={() => setTryHere(true)} /> : <GoogleButton />}
       {emailOn && (
         <>
           <span className="flex items-center gap-2 text-[11.5px] font-semibold tracking-wide text-mute uppercase"><span className="h-px flex-1 bg-line" />or<span className="h-px flex-1 bg-line" /></span>
