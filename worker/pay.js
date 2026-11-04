@@ -258,7 +258,7 @@ async function razorpayWebhook(request, env) {
 
 /* ---------------- receipts ---------------- */
 export const billingName = (env) => String(env.NILOBS_BILLING_NAME || "Sea N Shore IT Solutions LLP")
-export const supportEmail = (env) => String(env.NILOBS_SUPPORT_EMAIL || "adityaps700@gmail.com")
+export const supportEmail = (env) => String(env.NILOBS_SUPPORT_EMAIL || "nilobs@snsit.si")
 /** What a payment was for, in words. */
 export function itemName(key) {
   const f = parseFleetKey(key)
