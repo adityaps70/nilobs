@@ -34,7 +34,7 @@ test("feeds are read: RSS, Atom and GOV.UK search results", () => {
   assert.equal(g[0].url, "https://www.gov.uk/maib-reports/grounding")
 })
 
-function feedWorld(now) {
+function feedWorld(now, { mcaDown = false } = {}) {
   const calls = { ai: 0, prompts: [] }
   const fetchImpl = async (url, init = {}) => {
     const u = String(url)
@@ -45,15 +45,18 @@ function feedWorld(now) {
       const n = (body.messages[0].content.match(/^Item \d+/gm) || []).length
       const out = Array.from({ length: n }, (_, i) => {
         const headline = body.messages[0].content.split(/^Item \d+$/m)[i + 1] || ""
-        const relevant = /tanker|PSC|cargo/i.test(headline)
-        return { n: i + 1, relevance: relevant ? 85 : 10, kind: /PSC/.test(headline) ? "detention" : "industry", takeaway: relevant ? "What happened, in our words." : "", check: "Check the fire dampers close fully.", roles: ["deck", "nonsense"], topics: ["Emergency equipment", "Made up"] }
+        const relevant = /tanker|cargo|enclosed/i.test(headline)
+        return { n: i + 1, relevance: relevant ? 85 : 10, kind: /MAIB/.test(headline) ? "accident" : "rule", takeaway: relevant ? "What happened, in our words." : "", check: "Check the fire dampers close fully.", roles: ["deck", "nonsense"], topics: ["Emergency equipment", "Made up"] }
       })
       return claudeText(JSON.stringify(out))
     }
-    if (u.includes("gov.uk/api/search.json")) return new Response(JSON.stringify({ results: [{ title: "Explosion on a product tanker during cargo operations", link: "/maib-reports/explosion", description: "Investigation report.", public_timestamp: new Date(now - DAYMS).toISOString() }] }))
-    if (u === "https://gcaptain.com/feed/") return new Response(RSS([{ t: "Tokyo MOU PSC campaign on fire safety starts", u: "https://gcaptain.com/psc", at: now - 3600000, d: "Three-month campaign." }, { t: "Shipping company appoints new CEO", u: "https://gcaptain.com/ceo", at: now - 7200000, d: "Appointment." }, { t: "Old story about a tanker", u: "https://gcaptain.com/old", at: now - 40 * DAYMS, d: "Old." }]))
-    if (u === "https://splash247.com/feed/") return new Response("down", { status: 503 })
-    return new Response(RSS([]))
+    if (u.includes("gov.uk/api/search.json") && u.includes("maib_report"))
+      return new Response(JSON.stringify({ results: [{ title: "Explosion on a product tanker during cargo operations", link: "/maib-reports/explosion", description: "Investigation report.", public_timestamp: new Date(now - DAYMS).toISOString() }, { title: "Old tanker report", link: "/maib-reports/old", description: "Old.", public_timestamp: new Date(now - 40 * DAYMS).toISOString() }] }))
+    if (u.includes("gov.uk/api/search.json") && u.includes("maritime-and-coastguard-agency")) {
+      if (mcaDown) return new Response("down", { status: 503 })
+      return new Response(JSON.stringify({ results: [{ title: "MGN 999 (M) Enclosed space entry on tankers", link: "/government/publications/mgn-999", description: "Guidance.", public_timestamp: new Date(now - 2 * DAYMS).toISOString() }, { title: "Fishing vessel licence fees", link: "/government/publications/fees", description: "Fees.", public_timestamp: new Date(now - 2 * DAYMS).toISOString() }] }))
+    }
+    return new Response("not a source", { status: 404 })
   }
   return { fetchImpl, calls }
 }
@@ -73,74 +76,73 @@ async function runAll(env, now, fetchImpl) {
   return all
 }
 
+test("official sources only: UK MAIB and UK MCA on GOV.UK (Open Government Licence)", () => {
+  assert.deepEqual(SOURCES.map((s) => s.id), ["maib", "mca"])
+  assert.ok(SOURCES.every((s) => s.official && s.kind === "govuk" && s.urls.every((u) => u.startsWith("https://www.gov.uk/api/search.json"))))
+})
+
 test("the feed job keeps what's new and relevant, writes takeaways, records each source's health", async () => {
   const env = fresh()
   const now = Date.now()
   const { fetchImpl, calls } = feedWorld(now)
-  const first = await runFeed(env, now, fetchImpl)
-  assert.equal(Object.keys(first.sources).length, PER_RUN, "a few sources per run")
   const r = await runAll(env, now, fetchImpl)
-  Object.assign(r.sources, first.sources)
-  r.live += first.live
   assert.equal(Object.keys(r.sources).length, SOURCES.length, "every source gets its turn")
-  assert.equal(r.sources.splash.ok, false)
-  assert.match(r.sources.splash.error, /503/)
-  assert.equal(r.sources.gcaptain.recent, 2, "the 40-day-old story is skipped")
-  assert.equal(r.live, 2, "the MAIB report (found by both GOV.UK searches, stored once) + the PSC story; the CEO story is skipped")
-  assert.ok(!calls.prompts.join("").includes("Old story"), "old items never reach the AI")
+  assert.equal(r.sources.maib.recent, 1, "the 40-day-old report is skipped")
+  assert.equal(r.live, 2, "the MAIB report and the MCA tanker guidance; the fees notice is skipped")
+  assert.ok(!calls.prompts.join("").includes("Old tanker report"), "old items never reach the AI")
   const feed = await call(env, "/api/feed").then(json)
   assert.equal(feed.status, 200)
-  const psc = feed.items.find((i) => i.url === "https://gcaptain.com/psc")
-  assert.equal(psc.kind, "detention")
-  assert.equal(psc.sourceName, "gCaptain")
-  assert.deepEqual(psc.roles, ["deck"], "unknown roles dropped")
-  assert.deepEqual(psc.topics, ["Emergency equipment"], "only the app's own topics")
-  assert.ok(!feed.items.some((i) => /CEO/.test(i.title)))
-  const maib = feed.items.find((i) => i.source === "maib")
-  assert.equal(maib.official, true)
+  const mgn = feed.items.find((i) => i.url === "https://www.gov.uk/government/publications/mgn-999")
+  assert.equal(mgn.kind, "rule")
+  assert.equal(mgn.sourceName, "UK MCA")
+  assert.equal(mgn.official, true)
+  assert.deepEqual(mgn.roles, ["deck"], "unknown roles dropped")
+  assert.deepEqual(mgn.topics, ["Emergency equipment"], "only the app's own topics")
+  assert.ok(!feed.items.some((i) => /Fishing/.test(i.title)))
+  assert.ok(feed.items.every((i) => i.official))
   // nothing is due straight after: a run reads nothing and asks the AI nothing
   const before = calls.ai
   const r2 = await runFeed(env, now + 1000, fetchImpl)
   assert.deepEqual(r2.sources, {})
   assert.equal(r2.added, 0)
   assert.equal(calls.ai, before)
-  // three hours on, the sources that worked are read again (oldest first); the ones that failed wait 12 hours
+  // three hours on, the sources are read again; nothing is stored twice
   const later = await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)
   assert.ok(Object.keys(later.sources).length > 0)
-  assert.ok(!("splash" in later.sources), "a failing source isn't retried yet")
-  assert.equal(later.added, 0, "the same stories aren't stored twice")
-  const rows = (await env.DB.prepare("SELECT * FROM feed_sources").all()).results
-  assert.ok(dueSources(rows, now + RETRY_MS + 3600000).some((s) => s.id === "splash"), "retried after 12 hours")
-  const health = (await env.DB.prepare("SELECT * FROM feed_sources WHERE id = 'splash'").first())
-  assert.match(health.last_error, /503/)
-  assert.ok(SOURCES.length >= 4)
+  assert.equal(later.added, 0, "the same reports aren't stored twice")
 })
 
-test("a source without a fixed feed address: found from its page, then remembered", async () => {
+test("a source that fails is retried after 12 hours", async () => {
   const env = fresh()
   const now = Date.now()
+  const { fetchImpl } = feedWorld(now, { mcaDown: true })
+  const r = await runAll(env, now, fetchImpl)
+  assert.equal(r.sources.mca.ok, false)
+  assert.match(r.sources.mca.error, /503/)
+  const later = await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)
+  assert.ok(!("mca" in later.sources), "a failing source isn't retried yet")
+  const rows = (await env.DB.prepare("SELECT * FROM feed_sources").all()).results
+  assert.ok(dueSources(rows, now + RETRY_MS + 3600000).some((s) => s.id === "mca"), "retried after 12 hours")
+})
+
+test("items from sources that are no longer used (news sites) are never shown and are removed", async () => {
+  const env = fresh()
+  const now = Date.now()
+  const { fetchImpl } = feedWorld(now)
+  await runAll(env, now, fetchImpl)
+  // a story kept from before, when news sites were read
+  await env.DB.prepare("INSERT INTO feed_items (id, source, url, title, excerpt, published_at, fetched_at, status, kind, relevance, ai) VALUES ('old1', 'gcaptain', 'https://gcaptain.com/x', 'War widens', '', ?, ?, 'live', 'industry', 90, '{\"takeaway\":\"x\"}')").bind(now, now).run()
+  await env.DB.prepare("INSERT INTO feed_sources (id, last_run, last_ok, items) VALUES ('gcaptain', ?, ?, 5)").bind(now, now).run()
+  const feed = await call(env, "/api/feed").then(json)
+  assert.ok(!feed.items.some((i) => i.source === "gcaptain"), "never served")
+  await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM feed_items WHERE source = 'gcaptain'").first()).n, 0, "deleted on the next run")
+  assert.equal(await env.DB.prepare("SELECT * FROM feed_sources WHERE id = 'gcaptain'").first(), null)
+})
+
+test("feed addresses can still be found from a page's <link rel=alternate> (for a future official source)", () => {
   const html = `<html><head><link rel="alternate" type="application/rss+xml" title="News" href="/rss/news.xml"><link rel="alternate" type="application/rss+xml" href="/comments/feed"></head></html>`
-  assert.deepEqual(discoverFeeds(html, "https://www.ukpandi.com/news-and-resources/"), ["https://www.ukpandi.com/rss/news.xml"])
-  const seen = []
-  const fetchImpl = async (url, init) => {
-    const u = String(url)
-    seen.push(u)
-    if (u.startsWith("https://api.anthropic.com/")) return claudeText("[]")
-    if (u === "https://www.ukpandi.com/news-and-resources/") return new Response(html, { headers: { "content-type": "text/html" } })
-    if (u === "https://www.ukpandi.com/rss/news.xml") return new Response(RSS([{ t: "Marine safety alert: tanker cargo pump room fire", u: "https://www.ukpandi.com/a/1", at: now - 3600000, d: "Alert." }]))
-    if (u.includes("gov.uk")) return new Response(JSON.stringify({ results: [] }))
-    return new Response("nope", { status: 404 })
-  }
-  let r = { sources: {} }
-  for (let i = 0; i < 8 && !("ukpandi" in r.sources); i++) r = await runFeed(env, now, fetchImpl)
-  assert.equal(r.sources.ukpandi.ok, true)
-  assert.equal(r.sources.ukpandi.recent, 1)
-  const key = await env.DB.prepare("SELECT v FROM app_keys WHERE k = 'feed_url:ukpandi'").first()
-  assert.equal(key.v, "https://www.ukpandi.com/rss/news.xml")
-  seen.length = 0
-  for (let i = 0; i < 8; i++) if ("ukpandi" in (await runFeed(env, now + REFRESH_MS + 60000, fetchImpl)).sources) break
-  assert.ok(seen.includes("https://www.ukpandi.com/rss/news.xml"))
-  assert.ok(!seen.includes("https://www.ukpandi.com/news-and-resources/"), "the page isn't fetched again")
+  assert.deepEqual(discoverFeeds(html, "https://www.example.gov/news/"), ["https://www.example.gov/rss/news.xml"])
 })
 
 test("without the AI, new items wait (nothing half-written is shown)", async () => {

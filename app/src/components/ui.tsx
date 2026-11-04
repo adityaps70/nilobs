@@ -52,6 +52,6 @@ export function TopBar({ title, onBack, right }: { title: string; onBack?: () =>
 }
 
 export const Scroll = ({ children, className }: { children: ReactNode; className?: string }) => (
-  <div className={cn("no-scrollbar flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-6 [&>*]:shrink-0", className)}>{children}</div>
+  <div data-app-scroll className={cn("no-scrollbar flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-6 [&>*]:shrink-0", className)}>{children}</div>
 )
 

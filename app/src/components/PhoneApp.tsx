@@ -22,7 +22,8 @@ import { useProgress } from "@/progress"
 import { AiChip, AiInspector, AskCard, AskScreen, BriefPlan } from "@/components/AiFeatures"
 import { PhotoCheck } from "@/components/PhotoCheck"
 import { FLEET_STATS, KIT_TOTAL, OBS, type DeckId } from "@/fleet"
-import { CHAPTERS, OCIMF_URL, SECTIONS, chapterOf, libForRank, officialFor, sectionOf } from "@/library"
+import { CHAPTERS, OCIMF_URL, SECTIONS, chapterOf, libForRank, sectionOf } from "@/library"
+import { noteFor } from "@/notes"
 import { ChapterBadge, IconTile, TopicBadge, type TileColor } from "@/components/topicIcons"
 import { RolePicker, RoleSelect } from "@/components/RolePicker"
 import { AccountChip, useAuth } from "@/auth"
@@ -419,12 +420,29 @@ export function PhoneApp({
           </button>
         </aside>
       )}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" onWheel={wheelToScreen}>
         <div className="mx-auto flex min-h-0 w-full max-w-[720px] flex-1 flex-col pt-[max(12px,env(safe-area-inset-top,0px))] lg:pt-6">{content}</div>
         {tabBar}
       </div>
     </div>
   )
+}
+
+/**
+ * On a wide screen the app is a 720px column with empty space either side, and only the column's inner area
+ * scrolls. A mouse wheel over the empty space (or the top bar) would do nothing, so it's passed on to the screen's
+ * scrolling area. A wheel over something that scrolls by itself is left alone.
+ */
+function wheelToScreen(e: { ctrlKey: boolean; deltaY: number; currentTarget: HTMLDivElement; target: EventTarget | null }) {
+  if (e.ctrlKey || !e.deltaY) return
+  const root = e.currentTarget
+  for (let el = e.target as HTMLElement | null; el && el !== root; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY
+    if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) return
+  }
+  const areas = [...root.querySelectorAll<HTMLElement>("[data-app-scroll], .overflow-y-auto")].filter((el) => el.scrollHeight > el.clientHeight + 1 && el.offsetParent !== null)
+  const target = areas.sort((a, b) => b.clientHeight * b.clientWidth - a.clientHeight * a.clientWidth)[0]
+  target?.scrollBy({ top: e.deltaY, left: 0 })
 }
 
 /* ---------------- Onboarding ---------------- */
@@ -1270,6 +1288,7 @@ function Bank(p: {
           const isOpen = open === q.id
           const r = p.ratings[q.id]
           const isSaved = p.saved.includes(q.id)
+          const note = isOpen ? noteFor(q.id) : null
           return (
             <article key={q.id} className={cn("flex flex-col rounded-2xl border bg-surface transition-colors", r === "yes" ? "border-sea/50" : r === "unsure" ? "border-signal/50" : "border-line")}>
               <div className="flex items-start gap-1 p-3.5 pb-2">
@@ -1286,19 +1305,23 @@ function Bank(p: {
                 {isOpen && (
                   <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                     <div className="mx-3.5 mb-2 flex flex-col gap-1.5 rounded-xl bg-surface-2 p-3">
-                      <span className="font-mono text-[10.5px] tracking-[0.08em] text-mute uppercase">What they want to see</span>
-                      {TOPIC_EVIDENCE[q.topic].map((e) => (
-                        <span key={e} className="flex gap-2 text-[12.5px] leading-snug"><I.Check size={14} className="mt-0.5 shrink-0 text-sea" />{e}</span>
-                      ))}
-                      {officialFor(q.topic).length > 0 && (
+                      {note && (
                         <>
-                          <span className="mt-2 text-[12px] font-semibold text-mute">Related SIRE 2.0 questions</span>
-                          {officialFor(q.topic).map((o) => (
-                            <span key={o.n} className="flex gap-2 text-[12.5px] leading-snug">
-                              <span className="tnum shrink-0 rounded-md bg-primary-soft px-1.5 font-mono text-[11px] font-semibold text-primary">{o.n}</span>
-                              {o.t}
-                            </span>
+                          <span className="font-mono text-[10.5px] tracking-[0.08em] text-mute uppercase">What they want to see</span>
+                          {note.show.map((e) => (
+                            <span key={e} className="flex gap-2 text-[12.5px] leading-snug"><I.Check size={14} className="mt-0.5 shrink-0 text-sea" />{e}</span>
                           ))}
+                          {note.related.length > 0 && (
+                            <>
+                              <span className="mt-2 text-[12px] font-semibold text-mute">Related SIRE 2.0 questions</span>
+                              {note.related.map((o) => (
+                                <span key={o.n} className="flex gap-2 text-[12.5px] leading-snug">
+                                  <span className="tnum shrink-0 rounded-md bg-primary-soft px-1.5 font-mono text-[11px] font-semibold text-primary">{o.n}</span>
+                                  {o.t}
+                                </span>
+                              ))}
+                            </>
+                          )}
                         </>
                       )}
                       <button type="button" onClick={() => p.go("practice")} className="mt-1 self-start text-[12.5px] font-semibold text-primary">Rehearse with the AI inspector →</button>

@@ -152,6 +152,16 @@ const KIND: Record<string, { label: string; icon: Ico; color: TileColor }> = {
 }
 const kindOf = (k: string) => KIND[k] || KIND.industry
 
+/** Attribution the Open Government Licence asks for (UK MAIB and MCA publish on GOV.UK under it). */
+function OglNote() {
+  return (
+    <p className="text-[11.5px] leading-snug text-mute">
+      Contains public sector information from the UK MAIB and MCA, licensed under the{" "}
+      <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/" target="_blank" rel="noopener noreferrer" className="underline">Open Government Licence v3.0</a>. Takeaways and checks are NilObs's own.
+    </p>
+  )
+}
+
 function FeedCard({ it, fresh, onTopic, onAsk }: { it: FeedItem; fresh?: boolean; onTopic?: (t: Topic) => void; onAsk?: (q: string) => void }) {
   const k = kindOf(it.kind)
   return (
@@ -182,10 +192,11 @@ function FeedCard({ it, fresh, onTopic, onAsk }: { it: FeedItem; fresh?: boolean
           ))}
         </div>
       )}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] font-semibold">
-        <a href={it.url} target="_blank" rel="noopener noreferrer" className="text-primary">Read at {it.sourceName} ↗</a>
-        {onAsk && <button type="button" onClick={() => onAsk(`What does this mean for my next inspection, and what should I check? "${it.title}"`)} className="text-primary">Ask NilObs about it</button>}
-      </div>
+      {onAsk && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] font-semibold">
+          <button type="button" onClick={() => onAsk(`What does this mean for my next inspection, and what should I check? "${it.title}"`)} className="text-primary">Ask NilObs about it</button>
+        </div>
+      )}
     </article>
   )
 }
@@ -207,7 +218,7 @@ export function LiveScreen({ rank, openTopic, openAsk }: { rank: string; openTop
       <TopBar title="Live updates" right={<button type="button" aria-label="Refresh" onClick={() => refreshFeed(true)} className="flex size-10 items-center justify-center rounded-xl hover:bg-surface-2"><I.Refresh size={18} className={f.loading ? "animate-spin" : ""} /></button>} />
       <Scroll className="gap-3">
         <p className="text-[13px] leading-snug text-mute">
-          Official accident reports and guidance, port state control and maritime news, read by NilObs's AI for {side === "other" ? "you" : `a ${roleOf(rank).name}`}. Checked every few hours{f.updatedAt ? `, last ${ago(f.updatedAt)}` : ""}. Always read the source before acting on it.
+          Official accident reports (UK MAIB) and safety guidance (UK MCA), read by NilObs's AI for {side === "other" ? "you" : `a ${roleOf(rank).name}`}. Checked every few hours{f.updatedAt ? `, last ${ago(f.updatedAt)}` : ""}. Check against your company procedures before acting on it.
         </p>
         <div className="flex gap-1.5">
           <Chip size="sm" on={tab === "mine"} onClick={() => setTab("mine")}>For you</Chip>
@@ -220,6 +231,7 @@ export function LiveScreen({ rank, openTopic, openAsk }: { rank: string; openTop
           </div>
         )}
         {list.map((it) => <FeedCard key={it.id} it={it} fresh={it.publishedAt > seen && seen > 0} onTopic={openTopic} onAsk={openAsk} />)}
+        {list.length > 0 && <OglNote />}
         {!list.length && (
           <div className="flex flex-col items-center gap-2 rounded-[20px] border border-dashed border-line px-4 py-10 text-center">
             <IconTile icon={I.Antenna} color="teal" size={46} />
@@ -245,7 +257,7 @@ export function LiveCard({ rank, go }: { rank: string; go: (s: AppScreen) => voi
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 text-[15px] font-bold">
           <span className="relative flex size-2.5"><span className="absolute inline-flex size-full animate-ping rounded-full bg-signal opacity-60" /><span className="relative inline-flex size-2.5 rounded-full bg-signal" /></span>
-          Live from the industry
+          Live: official reports
         </span>
         {fresh > 0 && seen > 0 && <span className="rounded-full bg-signal px-2 py-0.5 text-[11px] font-bold text-white">{fresh} new</span>}
       </div>
@@ -280,12 +292,13 @@ export function LiveTeaser({ onOpen }: { onOpen: () => void }) {
           Live
         </span>
         <h2 id="live-teaser" className="display text-[28px] leading-tight font-bold">What changed this week, and what to check on board</h2>
-        <p className="max-w-[60ch] text-[14.5px] text-mute">Accident reports, port state control and safety alerts, read every few hours and turned into one thing to check, for your role.</p>
+        <p className="max-w-[60ch] text-[14.5px] text-mute">Official accident reports and safety guidance from the UK MAIB and MCA, read every few hours and turned into one thing to check, for your role.</p>
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {items.map((it) => <FeedCard key={it.id} it={it} />)}
       </div>
       <button type="button" onClick={onOpen} className="self-start rounded-full bg-primary px-5 py-3 text-[14.5px] font-semibold text-on-primary">Get updates for your role →</button>
+      <OglNote />
     </section>
   )
 }

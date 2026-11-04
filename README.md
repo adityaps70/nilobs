@@ -69,7 +69,7 @@ Signed in, the browser never decides a balance. `worker/wallet.js` keeps each ac
 
 ## Live features (worth opening every day)
 
-- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): the Worker reads public sources about every 3 hours, a few per run, oldest first (UK MAIB reports and MCA guidance through GOV.UK's search API; CHIRP Maritime and the P&I clubs Britannia and UK P&I; and Splash247, gCaptain, Marine Insight, The Maritime Executive, Hellenic Shipping News, Offshore Energy and Seatrade Maritime. The US Coast Guard, Paris MoU, AMSA, OCIMF, Gard, NorthStandard, Steamship Mutual and SAFETY4SEA were dropped: they block automated readers or have no readable feed). A source without a fixed feed address is found from its page's `<link rel="alternate">` and remembered; one that fails is retried after 12 hours. It keeps what's new, and has Claude (the quick model) judge each item's relevance to tanker crews and write a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
+- **Live updates** (`worker/feed.js`, `app/src/components/Live.tsx`): official sources only. The Worker reads UK MAIB accident reports and UK MCA safety guidance through GOV.UK's search API, about every 3 hours. Both are published under the Open Government Licence v3.0, and the app shows the attribution under the list. News sites (gCaptain, Marine Insight, Splash247 and others) and P&I clubs were removed in November 2026: we have no agreement to use their content and their reports can't be verified first. Items from a source that's no longer listed are deleted on the next run and never served. There are no "read at" links out of the app. A source that fails is retried after 12 hours. Claude (the quick model) judges each new item's relevance to tanker crews and writes a short takeaway and one thing to check on board, tagged by role and topic. Only relevant items show: on Today, on the Live screen (for your role or everything), on the home page for visitors (`GET /api/feed`, public), and as step 3 of today's drill. Each source's health is on the dashboard.
 - **Today's drill**: 3 flashcards (your brief's focus topics if the inspection is within 21 days, otherwise your weakest), 2 Spot rounds and one live update; +30 XP once a day (`progress.drill`).
 - **Daily reminders** (`worker/push.js`, `public/sw.js`): opt-in web push at the hour each person picks, in their own time zone, once a day. The Worker makes its own VAPID signing key on first use (kept in D1), sends empty pushes, and the service worker asks `/api/push/message` for a personal line (inspection countdown, streak, new updates). Only Google, Mozilla, Apple and Microsoft push addresses are accepted. On iPhone it works once NilObs is added to the Home Screen.
 - **Inspection pulse** (`worker/pulse.js`): debriefs shared from the app are checked and de-identified by Claude (names of ships, people, companies, oil majors, terminals and ports removed; a last regex pass catches ship prefixes, IMO numbers and emails). Others see only that version, plus trending topics for the last 14 days. Three a day per person; the owner can hide any of them on the dashboard.
@@ -127,6 +127,8 @@ Razorpay has to have Subscriptions switched on for the account. The Worker asks 
 ## Photo check
 
 Crew photograph an area, a piece of equipment or a record (up to 3 photos per check) and pick where it is on board. Claude looks at it the way a SIRE 2.0 inspector would and returns what would be flagged, how serious it is, why, and the fix, with numbered markers on the photo and similar findings from the real, de-identified observations in `app/src/gen/obs.json`. Results can be copied as a defect list, and any finding can be taken to Ask NilObs.
+
+- **Expert rules** (`EXPERT_RULES` in `app/src/photo.ts`): points our vetting experts have corrected go into the prompt for the areas they concern and override the model's general view. For example: warping drums must not be painted (the rope slips and can burn); the fixed gas detection system is usually the first to alarm when cargo leaks into ballast tanks or voids; an ODME failure goes in the Oil Record Book, with the office, flag and class told and a dispensation sought if needed.
 
 - Photos are shrunk on the phone to at most 1280 px and re-encoded as JPEG, which drops GPS and other metadata. They go to `/api/ai` for that one check and are never stored or logged; only a small thumbnail and the findings stay in the browser (`sr.photos`, last 10 checks).
 - The app asks crews to keep faces, the ship's name and the IMO number out of the frame, and Claude is told never to write any of them down.
@@ -209,7 +211,8 @@ public/sw.js       offline copy of the app for use at sea
 app/src            app source (React, Tailwind v4, Magic UI components)
 app/src/gen        de-identified fleet data (stories, observations, flashcards, ready kit)
 app/src/economy.ts plans, prices, credit rules (pure functions, tested)
-app/src/photo.ts   Photo check: areas, examples, prompt, reply clean-up (pure, tested)
+app/src/photo.ts   Photo check: areas, examples, expert rules, prompt, reply clean-up (pure, tested)
+app/src/notes.ts   "What to show" for each question in the bank (app/src/gen/bank-notes.json), with related SIRE 2.0 numbers
 app/src/auth.tsx   sign-in (Google, emailed code), account card, sync with the account
 app/src/cert.ts    what a certificate takes (shared with the Worker)
 app/src/components/Crew.tsx  crews, fleet plan, readiness report, certificate, receipts
@@ -220,7 +223,7 @@ migrations/        D1 schema
 app/build.mjs      builds public/index.html, the admin page and the topic pages
 app/seo/pages.ts   public SIRE 2.0 topic pages, sitemap.xml and robots.txt
 app/src/components/Closeout.tsx  the Close-out helper
-tests/             Worker, sign-in, wallet and payment tests (app/tests: economy, purchases, Photo check, sync)
+tests/             Worker, sign-in, wallet and payment tests (app/tests: economy, purchases, Photo check, sync, roles, in-app browsers, question notes)
 ```
 
 ## Data

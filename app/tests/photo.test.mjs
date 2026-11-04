@@ -52,6 +52,23 @@ test("the prompt carries the area, the photo count, the note and the examples, a
   assert.ok(P.photoPrompt(a, 1, "x".repeat(1000), "C/O", "Product", ex).length < s.length + 400)
 })
 
+test("our vetting experts' rules go into the prompt for the areas they concern", () => {
+  const mooring = P.areaById("mooring"), bridge = P.areaById("bridge"), cargo = P.areaById("cargo")
+  const m = P.photoPrompt(mooring, 1, "", "Bosun", "Product", P.examplesFor(mooring))
+  assert.match(m, /EXPERT RULES/)
+  assert.match(m, /Warping drums \(warping ends\) must NOT be painted/)
+  assert.match(m, /rope slip/)
+  assert.match(m, /Never suggest painting a warping drum/)
+  const c = P.photoPrompt(cargo, 1, "", "C/O", "Product", P.examplesFor(cargo))
+  assert.match(c, /fixed gas detection system for ballast tanks and void spaces is usually the first to raise the alarm/)
+  assert.match(c, /Oil Record Book, the office, flag and class informed, a dispensation/)
+  assert.doesNotMatch(c, /warping/i)
+  assert.match(P.photoPrompt(P.areaById("record"), 1, "", "C/O", "Product", []), /ODME/)
+  assert.equal(P.expertRulesFor(P.areaById("any")).length, 3)
+  const b = P.photoPrompt(bridge, 1, "", "2/O", "Product", P.examplesFor(bridge))
+  assert.doesNotMatch(b, /EXPERT RULES/, "no empty rules block")
+})
+
 test("normalize keeps good findings, clamps boxes and drops junk", () => {
   const ids = new Set(["O1", "O2"])
   const r = P.normalize(

@@ -196,7 +196,7 @@ export function AiSection() {
   return (
     <section id="ai" className="gutter scroll-mt-20 py-20">
       <div className="mx-auto flex max-w-[1180px] flex-col gap-10">
-        <SectionHead eyebrow="AI, powered by Claude" title="An inspector in your pocket who never runs out of questions">
+        <SectionHead eyebrow="AI, built for SIRE 2.0" title="An inspector in your pocket who never runs out of questions">
           Practise out loud, get graded like the real thing, and ask about anything you're unsure of. Every answer is grounded in real inspections.
         </SectionHead>
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -243,7 +243,7 @@ export function AiSection() {
             <button type="button" onClick={() => openApp({ screen: "practice" })} className="self-start text-[13.5px] font-semibold text-primary">Try the AI inspector →</button>
           </div>
         </div>
-        <p className="text-[12.5px] leading-snug text-mute">AI features run on Claude, through NilObs. AI answers can be wrong: check them against your SMS and the current rules.</p>
+        <p className="text-[12.5px] leading-snug text-mute">AI answers can be wrong: check them against your SMS and the current rules.</p>
       </div>
     </section>
   )

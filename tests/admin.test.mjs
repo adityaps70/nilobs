@@ -127,7 +127,7 @@ test("live features on the dashboard: feed sources, reminders, drills; the owner
   const shared = await call(env, "/api/pulse", { method: "POST", cookie: sailor.cookie, body: { text: "SIRE inspection: the inspector began in the cargo control room and asked for the ODME log, then went to the bridge." } }).then(json)
   assert.equal(shared.body.status, "live")
   const d = await (await call(env, "/api/admin/stats", { cookie: boss.cookie })).json()
-  assert.ok(d.live.sources.length >= 4)
+  assert.deepEqual(d.live.sources.map((s) => s.name), ["UK MAIB", "UK MCA"], "official sources only")
   assert.equal(d.live.reminders.people, 1)
   assert.equal(d.live.drillPeople, 1)
   assert.equal(d.live.pulse.week, 1)

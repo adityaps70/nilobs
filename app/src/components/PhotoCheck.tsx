@@ -141,6 +141,13 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
   const [view, setView] = useState<Saved | null>(null)
   const camRef = useRef<HTMLInputElement>(null)
   const libRef = useRef<HTMLInputElement>(null)
+  // after photos are added, bring the Check button into view (on a laptop it's below the fold)
+  const checkRef = useRef<HTMLButtonElement>(null)
+  const shotCount = useRef(0)
+  useEffect(() => {
+    if (shots.length > shotCount.current) checkRef.current?.scrollIntoView({ block: "center", behavior: "smooth" })
+    shotCount.current = shots.length
+  }, [shots.length])
   const shotsRef = useRef(shots)
   shotsRef.current = shots
 
@@ -314,7 +321,7 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
         <section className="flex flex-col gap-1.5">
           <span className="flex items-center gap-2"><AiChip /><span className="text-[12px] font-semibold text-mute">Before the inspector sees it</span></span>
           <h2 className="display text-[23px] leading-tight font-bold">Snap it. See what an inspector would flag.</h2>
-          <p className="text-[13.5px] leading-snug text-mute">Photograph an area, a piece of equipment or a record. Claude looks at it like a SIRE 2.0 inspector: what would be raised, why, and how to fix it first, with similar findings from real inspections.</p>
+          <p className="text-[13.5px] leading-snug text-mute">Photograph an area, a piece of equipment or a record. NilObs looks at it with an inspector's eye, using rules from our vetting experts: what would be raised, why, and how to fix it first, with similar findings from real inspections.</p>
         </section>
 
         {sample === null ? (
@@ -324,7 +331,7 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
             <IconTile icon={I.Camera} color="sky" size={34} />
             <span className="flex flex-col gap-1">
               <b className="font-semibold">Photos can't be sent from this view</b>
-              <span className="text-mute">Open NilObs in the Claude app or on the NilObs site to use Photo check. Ask NilObs and the AI inspector still work here.</span>
+              <span className="text-mute">Open NilObs at nilobs.com to use Photo check. Ask NilObs and the AI inspector still work here.</span>
             </span>
           </div>
         ) : (
@@ -391,7 +398,7 @@ export function PhotoCheck({ rank, ship, onAsk }: { rank: string; ship: string; 
                 className="h-11 rounded-xl border border-line bg-surface px-3 text-[14px] outline-none focus:border-primary" />
             </section>
 
-            <button type="button" disabled={!shots.length || !sample || busyPick} onClick={() => run()}
+            <button ref={checkRef} type="button" disabled={!shots.length || !sample || busyPick} onClick={() => run()}
               className="flex h-12 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#7b5cff] to-[#1660d6] text-[14.5px] font-semibold text-white disabled:opacity-45">
               <I.Sparkle size={17} /> {shots.length ? `Check ${shots.length === 1 ? "this photo" : `${shots.length} photos`} · ${cost} credits` : "Add a photo to check"}
             </button>

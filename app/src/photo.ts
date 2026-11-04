@@ -54,6 +54,21 @@ export function similarObs(text: string, area: Area, n = 2): { id: string; o: Ob
     .map((x) => ({ id: `O${x.i}`, o: x.o }))
 }
 
+/* ---------------- expert rules ---------------- */
+// Points our vetting experts have corrected or insisted on. They go into the prompt for the areas they concern and
+// override the model's general view (for example, it once suggested painting a warping drum).
+const WARPING_DRUM = "Warping drums (warping ends) must NOT be painted: paint lets the rope slip and the friction can burn and damage the rope. The rope surface should be clean, bare metal. Never suggest painting a warping drum; if one is painted, raise it as a finding (severity high) and say to remove the paint from the rope surface."
+const DOUBLE_HULL_GAS = "The fixed gas detection system for ballast tanks and void spaces is usually the first to raise the alarm if cargo leaks into the double hull. If its panel is in view, look for faults or inhibited points; otherwise put its sampling points, alarm settings and last span-gas check in check_next."
+const ODME_FAILURE = "If the ODME is faulty or out of service: it must be recorded in the Oil Record Book, the office, flag and class informed, a dispensation obtained if one is needed, corrective action taken, and an ORB entry made once it is repaired. A fix that leaves any of these out is incomplete."
+export const EXPERT_RULES: Partial<Record<AreaId, string[]>> = {
+  deck: [WARPING_DRUM],
+  mooring: [WARPING_DRUM],
+  cargo: [DOUBLE_HULL_GAS, ODME_FAILURE],
+  record: [ODME_FAILURE],
+  any: [WARPING_DRUM, DOUBLE_HULL_GAS, ODME_FAILURE],
+}
+export const expertRulesFor = (area: Area) => EXPERT_RULES[area.id] ?? []
+
 /* ---------------- result shape ---------------- */
 export type Sev = "high" | "medium" | "low"
 export type Box = [number, number, number, number]
@@ -123,7 +138,7 @@ Rules:
 - severity: "high" = you would very likely raise an observation; "medium" = it could be raised or would draw questions; "low" = housekeeping or a minor point.
 - box: where it is in that photo, as [x, y, width, height], each a fraction from 0 to 1 of the image, x and y being the top-left corner. null if it isn't one spot.
 - related: up to 2 ids from EXAMPLES that describe a similar real finding, else [].
-
+${expertRulesFor(area).length ? `\nEXPERT RULES from NilObs's vetting experts (always apply them; they override your general view):\n${expertRulesFor(area).map((r) => `- ${r}`).join("\n")}\n` : ""}
 EXAMPLES of real observations from inspections in this area (de-identified):
 ${ex.map(({ id, o }) => `[${id}] ch ${o.c}${o.y ? ` ${TYPE_NAME[o.y]}` : ""}: ${o.t}`).join("\n")}
 

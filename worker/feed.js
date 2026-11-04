@@ -1,7 +1,12 @@
-// The live industry feed. Every few hours (worker/index.js → scheduled) the Worker reads a handful of public
-// sources (official accident reports and guidance, plus maritime news feeds), keeps what's new, and asks Claude
-// which items matter to a tanker crew facing a SIRE 2.0 inspection. For those it writes a short takeaway in its
-// own words and one thing to check on board, tagged by role and topic. Readers always get the source's link.
+// The live feed. Every few hours (worker/index.js → scheduled) the Worker reads official sources only: UK MAIB
+// accident reports and UK MCA guidance, published on GOV.UK under the Open Government Licence v3.0, which allows
+// reuse with attribution. It keeps what's new and asks the AI which items matter to a tanker crew facing a SIRE 2.0
+// inspection. For those it writes a short takeaway in its own words and one thing to check on board, tagged by role
+// and topic. The app names the source; it doesn't send readers off to other sites.
+//
+// News sites and P&I club publications (gCaptain, Marine Insight, Splash247 and others) were removed in Nov 2026:
+// there's no agreement to use their content and their reports aren't verified. Items from a source that is no longer
+// listed are never served and are deleted on the next run. Add a source only when its terms allow reuse.
 //
 //   GET /api/feed?limit=30&before=<ms>   the latest items worth reading (public: the home page shows a few)
 //
@@ -13,20 +18,10 @@ import { DAY, TOPICS, claudeJson, cleanTopics, ensureLiveSchema, json, plain, sh
 export const SOURCES = [
   { id: "maib", name: "UK MAIB", kind: "govuk", official: true, urls: ["https://www.gov.uk/api/search.json?filter_content_store_document_type=maib_report&order=-public_timestamp&count=15"] },
   { id: "mca", name: "UK MCA", kind: "govuk", official: true, urls: ["https://www.gov.uk/api/search.json?filter_organisations=maritime-and-coastguard-agency&filter_format=guidance&filter_format=statutory_guidance&order=-public_timestamp&count=15"] },
-  { id: "chirp", name: "CHIRP Maritime", kind: "rss", urls: ["https://chirp.co.uk/feed/"], home: "https://chirp.co.uk/maritime/" },
-  { id: "britannia", name: "Britannia P&I", kind: "rss", urls: ["https://britanniapandi.com/feed/"], home: "https://britanniapandi.com/" },
-  { id: "ukpandi", name: "UK P&I Club", kind: "rss", urls: [], home: "https://www.ukpandi.com/news-and-resources/" },
-  { id: "splash", name: "Splash247", kind: "rss", urls: ["https://splash247.com/feed/"] },
-  { id: "gcaptain", name: "gCaptain", kind: "rss", urls: ["https://gcaptain.com/feed/"] },
-  { id: "marineinsight", name: "Marine Insight", kind: "rss", urls: ["https://www.marineinsight.com/feed/"] },
-  { id: "maritimeexecutive", name: "The Maritime Executive", kind: "rss", urls: ["https://maritime-executive.com/articles.rss"], home: "https://maritime-executive.com/" },
-  { id: "hellenic", name: "Hellenic Shipping News", kind: "rss", urls: ["https://www.hellenicshippingnews.com/feed/"] },
-  { id: "offshoreenergy", name: "Offshore Energy", kind: "rss", urls: ["https://www.offshore-energy.biz/feed/"], home: "https://www.offshore-energy.biz/" },
-  { id: "seatrade", name: "Seatrade Maritime", kind: "rss", urls: ["https://www.seatrade-maritime.com/rss.xml"], home: "https://www.seatrade-maritime.com/" },
 ]
-// Dropped after a week of failures (Oct 2026): US Coast Guard and NorthStandard turn automated readers away (403);
-// Paris MoU, OCIMF, AMSA, Gard and Steamship Mutual publish no feed we can read; SAFETY4SEA's feed came back empty.
 const SOURCE = new Map(SOURCES.map((s) => [s.id, s]))
+const LISTED = SOURCES.map((s) => s.id)
+const IN_LISTED = `source IN (${LISTED.map((id) => `'${id}'`).join(", ")})`
 export const KINDS = ["detention", "alert", "accident", "rule", "sire", "industry"]
 const KEEP_DAYS = 14 // older items aren't news any more
 const AI_PER_RUN = 16
@@ -135,7 +130,7 @@ async function readSource(src, fetchImpl, known = "") {
 }
 
 /* ---------------- the AI's reading ---------------- */
-const SYSTEM = `You brief tanker officers, engineers, ratings and shore superintendents on news that matters for SIRE 2.0 inspections, port state control and safe operations.
+const SYSTEM = `You brief tanker officers, engineers, ratings and shore superintendents on official accident reports and safety guidance that matter for SIRE 2.0 inspections, port state control and safe operations.
 For each item you get a headline, source and short excerpt. Judge it only from that. Write in your own plain words: never copy sentences from the excerpt, never name people, never invent facts that aren't in the item.
 Answer with JSON only: an array with one object per item, in the same order:
 {"n": item number, "relevance": 0-100 (how useful to a tanker crew or their superintendent preparing for vetting or a PSC inspection; corporate news, appointments, markets, finance, newbuild orders and fishing-only stories are below 30),
@@ -175,6 +170,8 @@ export async function fetchSources(env, now = Date.now(), fetchImpl = fetch) {
   await ensureLiveSchema(env.DB)
   const db = env.DB
   const report = { sources: {}, added: 0 }
+  // sources no longer listed: their items and their health go
+  await db.batch([db.prepare(`DELETE FROM feed_items WHERE NOT (${IN_LISTED})`), db.prepare(`DELETE FROM feed_sources WHERE id NOT IN (${LISTED.map((id) => `'${id}'`).join(", ")})`)])
   const rows = (await db.prepare("SELECT * FROM feed_sources").all()).results || []
   const due = dueSources(rows, now).slice(0, PER_RUN)
   if (!due.length) return report
@@ -223,7 +220,7 @@ export async function readNew(env, now = Date.now(), fetchImpl = fetch) {
   await ensureLiveSchema(env.DB)
   const db = env.DB
   const report = { read: 0, live: 0 }
-  const unread = (await db.prepare(`SELECT id, source, title, excerpt FROM feed_items WHERE status = 'new' ORDER BY published_at DESC LIMIT ${AI_PER_RUN}`).all()).results || []
+  const unread = (await db.prepare(`SELECT id, source, title, excerpt FROM feed_items WHERE status = 'new' AND ${IN_LISTED} ORDER BY published_at DESC LIMIT ${AI_PER_RUN}`).all()).results || []
   const updates = []
   for (let i = 0; i < unread.length; i += AI_BATCH) {
     const rows = unread.slice(i, i + AI_BATCH)
@@ -274,14 +271,14 @@ export async function latestFeed(db, { limit = 30, before = 0 } = {}) {
   await ensureLiveSchema(db)
   const n = Math.max(1, Math.min(60, Number(limit) || 30))
   const rows = before
-    ? (await db.prepare(`SELECT * FROM feed_items WHERE status = 'live' AND published_at < ? ORDER BY published_at DESC LIMIT ${n}`).bind(Number(before)).all()).results
-    : (await db.prepare(`SELECT * FROM feed_items WHERE status = 'live' ORDER BY published_at DESC LIMIT ${n}`).all()).results
+    ? (await db.prepare(`SELECT * FROM feed_items WHERE status = 'live' AND ${IN_LISTED} AND published_at < ? ORDER BY published_at DESC LIMIT ${n}`).bind(Number(before)).all()).results
+    : (await db.prepare(`SELECT * FROM feed_items WHERE status = 'live' AND ${IN_LISTED} ORDER BY published_at DESC LIMIT ${n}`).all()).results
   return (rows || []).map(feedItem)
 }
 
 /** Unread items waiting? Let one visit (at a time, every few minutes) have the AI read them in the background. */
 export async function readNewIfDue(env, ctx, now = Date.now(), fetchImpl = fetch) {
-  const waiting = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM feed_items WHERE status = 'new'").first())?.n) || 0
+  const waiting = Number((await env.DB.prepare(`SELECT COUNT(*) AS n FROM feed_items WHERE status = 'new' AND ${IN_LISTED}`).first())?.n) || 0
   if (!waiting || !env.ANTHROPIC_API_KEY || !ctx?.waitUntil) return waiting
   await env.DB.prepare("INSERT OR IGNORE INTO app_keys (k, v) VALUES ('feed_ai', '0')").run()
   const lock = await env.DB.prepare("UPDATE app_keys SET v = ? WHERE k = 'feed_ai' AND CAST(v AS INTEGER) < ?").bind(String(now), now - 3 * 60000).run()
@@ -296,7 +293,7 @@ export async function handleFeed(request, env, ctx) {
   await ensureLiveSchema(env.DB)
   const pending = await readNewIfDue(env, ctx).catch(() => 0)
   const items = await latestFeed(env.DB, { limit: url.searchParams.get("limit"), before: url.searchParams.get("before") })
-  const last = await env.DB.prepare("SELECT MAX(last_ok) AS t FROM feed_sources").first().catch(() => null)
+  const last = await env.DB.prepare(`SELECT MAX(last_ok) AS t FROM feed_sources WHERE id IN (${LISTED.map((id) => `'${id}'`).join(", ")})`).first().catch(() => null)
   // a short cache: everyone sees the same feed, and it changes every few hours
   return json(200, { items, updatedAt: Number(last?.t) || 0, pending }, { "cache-control": "public, max-age=60" })
 }

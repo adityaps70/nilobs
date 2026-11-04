@@ -21,6 +21,7 @@ import { COST_ROWS, CurrencyToggle, CycleToggle, priceLine } from "@/components/
 import { cn } from "@/lib/utils"
 import { useNav } from "@/nav"
 import { BANK, STATS, TOPIC_EVIDENCE } from "@/data"
+import { noteFor } from "@/notes"
 import { CHAPTERS, chaptersForRank, libForRank } from "@/library"
 import { ChapterBadge, TopicBadge } from "@/components/topicIcons"
 import { LESSONS, STORIES, storyById } from "@/stories"
@@ -571,7 +572,7 @@ export function ConfidenceCheck() {
                     <TopicBadge topic={q.topic} size={34} />
                     <span className="flex min-w-0 flex-1 flex-col gap-1">
                       <span className="text-[14.5px] leading-snug font-medium">{q.q}</span>
-                      <span className="text-[12.5px] leading-snug text-mute">Show: {TOPIC_EVIDENCE[q.topic][0]}</span>
+                      <span className="text-[12.5px] leading-snug text-mute">Show: {noteFor(q.id)?.show[0] ?? TOPIC_EVIDENCE[q.topic][0]}</span>
                     </span>
                     <span className={cn("mt-1 flex size-6 shrink-0 items-center justify-center rounded-full border-2", can[q.id] ? "border-sea bg-sea text-white" : "border-line")}>{can[q.id] && <I.Check size={14} />}</span>
                   </button>

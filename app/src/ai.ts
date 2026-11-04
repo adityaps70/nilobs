@@ -211,7 +211,7 @@ export function aiErrorCopy(e: AiErr) {
     case "session_expired":
       return "Your sign-in ended. Sign in with Google again to use the AI."
     case "refused":
-      return "Claude couldn't answer that one. Try asking it a different way."
+      return "The AI couldn't answer that one. Try asking it a different way."
     case "payment":
       return "That charge wasn't accepted, so nothing was taken. Check your credits and try again."
     case "invalid_json":
